@@ -35,10 +35,10 @@ class _DirectoryConfig(BaseModel):
             raise ValueError("must not be blank")
         return value
 
-    @field_validator("secret", mode="before")
+    @field_validator("secret")
     @classmethod
-    def secret_must_not_be_blank(cls, value: Any) -> Any:
-        if isinstance(value, str) and not value.strip():
+    def secret_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
             raise ValueError("must not be blank")
         return value
 
@@ -65,7 +65,7 @@ class CustomerContactDirectory:
         )
         config = _DirectoryConfig(
             corp_id=corp_id,
-            secret=secret,
+            secret=SecretStr(secret),
             database_url=resolved_url,
             proxy=proxy,
             timeout=timeout,
