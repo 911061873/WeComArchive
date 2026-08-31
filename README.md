@@ -55,7 +55,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-未传入 `database_url` 时会在操作系统用户数据目录中创建 SQLite 数据库。也可以显式传入 SQLAlchemy 数据库 URL，组件会为 SQLite、MySQL 和 PostgreSQL 选择异步驱动；MySQL 和 PostgreSQL 分别需要安装 `mysql`、`postgresql` 可选依赖。可通过 `proxy` 为客户联系 REST API 配置 HTTP 代理，通过 `qps` 调整单个客户端实例的平滑请求速率上限，默认值为 `50`。token 获取、业务请求和重试都会计入 QPS。Secret、仅保存在进程内存中的访问令牌及带认证信息的代理地址不得写入日志。
+未传入 `database_url` 时会在操作系统用户数据目录中创建 SQLite 数据库。也可以显式传入 SQLAlchemy 数据库 URL，组件会为 SQLite、MySQL 和 PostgreSQL 选择异步驱动；MySQL 和 PostgreSQL 分别需要安装 `mysql`、`postgresql` 可选依赖。可通过 `proxy` 为客户联系 REST API 配置 HTTP 代理，通过 `qps` 调整单个客户端实例的平滑请求速率上限，默认值为 `50`；通过 `request_concurrency` 限制同时在途的请求数，默认值为 `8`。客户同步会并发处理不同的成员分组，同一分组内仍按游标顺序翻页，并将客户及跟进关系按批次写入数据库。token 获取、业务请求和重试都会计入 QPS。Secret、仅保存在进程内存中的访问令牌及带认证信息的代理地址不得写入日志。
 
 ### 真实接口测试
 

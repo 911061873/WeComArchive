@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import time
 
 import httpx
 import pytest
 
 from wecom_archive._wecom_client import WeComCustomerClient
-from wecom_archive.exceptions import WeComTransportError
+from wecom_archive.exceptions import ConfigurationError, WeComTransportError
 
 
 @pytest.mark.asyncio
@@ -106,3 +107,60 @@ async def test_client_rejects_invalid_response_shape() -> None:
     ) as client:
         with pytest.raises(WeComTransportError):
             await client.get_follow_users()
+
+
+@pytest.mark.asyncio
+async def test_customer_details_are_yielded_one_page_at_a_time() -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/cgi-bin/gettoken":
+            return httpx.Response(
+                200, json={"errcode": 0, "access_token": "token", "expires_in": 7200}
+            )
+        body = json.loads(request.content)
+        request_bodies.append(body)
+        page = len(request_bodies)
+        return httpx.Response(
+            200,
+            json={
+                "errcode": 0,
+                "external_contact_list": [
+                    {
+                        "external_contact": {"external_userid": f"customer-{page}"},
+                        "follow_info": {"userid": "alice"},
+                    }
+                ],
+                "next_cursor": "next-page" if page == 1 else "",
+            },
+        )
+
+    async with WeComCustomerClient(
+        corp_id="corp",
+        secret="secret",
+        qps=10_000,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        pages = [page async for page in client.iter_customer_details(["alice"])]
+
+    assert [page[0].external_contact.external_userid for page in pages] == [
+        "customer-1",
+        "customer-2",
+    ]
+    assert request_bodies == [
+        {"userid_list": ["alice"], "limit": 100},
+        {"userid_list": ["alice"], "limit": 100, "cursor": "next-page"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_customer_details_reject_invalid_user_group_size() -> None:
+    async with WeComCustomerClient(
+        corp_id="corp",
+        secret="secret",
+        transport=httpx.MockTransport(lambda _: httpx.Response(500)),
+    ) as client:
+        with pytest.raises(ConfigurationError):
+            _ = [page async for page in client.iter_customer_details([])]
+        with pytest.raises(ConfigurationError):
+            _ = [page async for page in client.iter_customer_details([str(i) for i in range(101)])]

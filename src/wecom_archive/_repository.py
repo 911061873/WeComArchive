@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ._models import Customer, CustomerFollow, GroupAdmin, GroupChat, GroupMember, SyncRun
@@ -56,63 +57,99 @@ class CustomerDirectoryRepository:
                 run.error_summary = error_summary[:500]
 
     async def upsert_customer_item(self, run_id: str, item: CustomerDetailItem) -> str:
-        external = item.external_contact
-        follow = item.follow_info
-        external_raw = external.model_dump(mode="json")
-        follow_raw = follow.model_dump(mode="json")
+        await self.upsert_customer_items(run_id, [item])
+        return item.external_contact.external_userid
+
+    async def upsert_customer_items(
+        self, run_id: str, items: Sequence[CustomerDetailItem]
+    ) -> set[str]:
+        if not items:
+            return set()
+
+        customer_data = {
+            item.external_contact.external_userid: item.external_contact for item in items
+        }
+        follow_data = {
+            (item.external_contact.external_userid, item.follow_info.userid): item.follow_info
+            for item in items
+        }
         now = _now()
         async with self._sessions.begin() as session:
-            customer = await session.get(Customer, external.external_userid)
-            if customer is None:
-                customer = Customer(
-                    external_userid=external.external_userid,
-                    first_seen_at=now,
-                    last_seen_at=now,
-                    last_seen_run_id=run_id,
-                    is_active=True,
-                    raw_data={},
-                )
-                session.add(customer)
-            customer.name = external.name
-            customer.position = external.position
-            customer.avatar = external.avatar
-            customer.corp_name = external.corp_name
-            customer.corp_full_name = external.corp_full_name
-            customer.type = external.type
-            customer.gender = external.gender
-            customer.unionid = external.unionid
-            customer.raw_data = external_raw
-            customer.is_active = True
-            customer.last_seen_run_id = run_id
-            customer.last_seen_at = now
+            customer_ids = set(customer_data)
+            existing_customers = {
+                customer.external_userid: customer
+                for customer in (
+                    await session.scalars(
+                        select(Customer).where(Customer.external_userid.in_(customer_ids))
+                    )
+                ).all()
+            }
+            for external_userid, external in customer_data.items():
+                customer = existing_customers.get(external_userid)
+                if customer is None:
+                    customer = Customer(
+                        external_userid=external_userid,
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        last_seen_run_id=run_id,
+                        is_active=True,
+                        raw_data={},
+                    )
+                    session.add(customer)
+                customer.name = external.name
+                customer.position = external.position
+                customer.avatar = external.avatar
+                customer.corp_name = external.corp_name
+                customer.corp_full_name = external.corp_full_name
+                customer.type = external.type
+                customer.gender = external.gender
+                customer.unionid = external.unionid
+                customer.raw_data = external.model_dump(mode="json")
+                customer.is_active = True
+                customer.last_seen_run_id = run_id
+                customer.last_seen_at = now
 
-            key = {"external_userid": external.external_userid, "userid": follow.userid}
-            relation = await session.get(CustomerFollow, key)
-            if relation is None:
-                relation = CustomerFollow(
-                    **key,
-                    last_seen_at=now,
-                    last_seen_run_id=run_id,
-                    is_active=True,
-                    raw_data={},
-                    tag_ids=[],
-                    remark_mobiles=[],
-                )
-                session.add(relation)
-            relation.remark = follow.remark
-            relation.description = follow.description
-            relation.create_time = follow.createtime
-            relation.tag_ids = follow.tag_id
-            relation.remark_corp_name = follow.remark_corp_name
-            relation.remark_mobiles = follow.remark_mobiles
-            relation.oper_userid = follow.oper_userid
-            relation.add_way = follow.add_way
-            relation.state = follow.state
-            relation.raw_data = follow_raw
-            relation.is_active = True
-            relation.last_seen_run_id = run_id
-            relation.last_seen_at = now
-        return external.external_userid
+            follow_keys = set(follow_data)
+            existing_follows = {
+                (relation.external_userid, relation.userid): relation
+                for relation in (
+                    await session.scalars(
+                        select(CustomerFollow).where(
+                            tuple_(CustomerFollow.external_userid, CustomerFollow.userid).in_(
+                                follow_keys
+                            )
+                        )
+                    )
+                ).all()
+            }
+            for (external_userid, userid), follow in follow_data.items():
+                relation = existing_follows.get((external_userid, userid))
+                if relation is None:
+                    relation = CustomerFollow(
+                        external_userid=external_userid,
+                        userid=userid,
+                        last_seen_at=now,
+                        last_seen_run_id=run_id,
+                        is_active=True,
+                        raw_data={},
+                        tag_ids=[],
+                        remark_mobiles=[],
+                    )
+                    session.add(relation)
+                relation.remark = follow.remark
+                relation.description = follow.description
+                relation.create_time = follow.createtime
+                relation.tag_ids = follow.tag_id
+                relation.remark_corp_name = follow.remark_corp_name
+                relation.remark_mobiles = follow.remark_mobiles
+                relation.oper_userid = follow.oper_userid
+                relation.add_way = follow.add_way
+                relation.state = follow.state
+                relation.raw_data = follow.model_dump(mode="json")
+                relation.is_active = True
+                relation.last_seen_run_id = run_id
+                relation.last_seen_at = now
+        return set(customer_data)
 
     async def finalize_customers(self, run_id: str, seen_count: int) -> SyncResult:
         async with self._sessions.begin() as session:

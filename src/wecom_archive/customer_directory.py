@@ -15,6 +15,10 @@ from .exceptions import WeComArchiveError
 from .types import CustomerRecord, GroupChatRecord, SyncResult
 
 
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[offset : offset + size] for offset in range(0, len(values), size)]
+
+
 class _DirectoryConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -25,6 +29,7 @@ class _DirectoryConfig(BaseModel):
     timeout: PositiveFloat = 20.0
     base_url: str = "https://qyapi.weixin.qq.com"
     qps: PositiveFloat = 50.0
+    request_concurrency: int = Field(default=8, ge=1)
     max_retries: int = Field(default=2, ge=0)
     retry_backoff: float = Field(default=0.5, ge=0)
 
@@ -57,6 +62,7 @@ class CustomerContactDirectory:
         timeout: float = 20.0,
         base_url: str = "https://qyapi.weixin.qq.com",
         qps: float = 50.0,
+        request_concurrency: int = 8,
         max_retries: int = 2,
         retry_backoff: float = 0.5,
     ) -> None:
@@ -71,6 +77,7 @@ class CustomerContactDirectory:
             timeout=timeout,
             base_url=base_url,
             qps=qps,
+            request_concurrency=request_concurrency,
             max_retries=max_retries,
             retry_backoff=retry_backoff,
         )
@@ -81,13 +88,16 @@ class CustomerContactDirectory:
             timeout=config.timeout,
             base_url=config.base_url,
             qps=config.qps,
+            request_concurrency=config.request_concurrency,
             max_retries=config.max_retries,
             retry_backoff=config.retry_backoff,
         )
         self._database_url = config.database_url
         self._repository = CustomerDirectoryRepository(config.database_url)
+        self._request_concurrency = config.request_concurrency
         self._initialized = False
         self._initialize_lock = asyncio.Lock()
+        self._customer_sync_lock = asyncio.Lock()
         self._closed = False
 
     def __repr__(self) -> str:
@@ -114,12 +124,41 @@ class CustomerContactDirectory:
 
     async def sync_customers_once(self) -> SyncResult:
         await self._ensure_initialized()
+        async with self._customer_sync_lock:
+            return await self._sync_customers_once()
+
+    async def _sync_customers_once(self) -> SyncResult:
         run_id = await self._repository.start_run("customers")
         seen: set[str] = set()
+        write_lock = asyncio.Lock()
         try:
             follow_users = await self._client.get_follow_users()
-            async for item in self._client.iter_customer_details(follow_users):
-                seen.add(await self._repository.upsert_customer_item(run_id, item))
+
+            async def sync_chunk(userids: list[str]) -> None:
+                async for items in self._client.iter_customer_details(userids):
+                    if not items:
+                        continue
+                    async with write_lock:
+                        seen.update(await self._repository.upsert_customer_items(run_id, items))
+
+            semaphore = asyncio.Semaphore(self._request_concurrency)
+
+            async def run_chunk(userids: list[str]) -> None:
+                async with semaphore:
+                    await sync_chunk(userids)
+
+            tasks = [
+                asyncio.create_task(run_chunk(userids)) for userids in _chunks(follow_users, 100)
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+
             return await self._repository.finalize_customers(run_id, len(seen))
         except Exception as exc:
             await self._record_failed_run(run_id, exc)

@@ -150,6 +150,7 @@ class WeComCustomerClient:
         timeout: float = 20.0,
         proxy: str | None = None,
         qps: float = 50.0,
+        request_concurrency: int = 8,
         max_retries: int = 2,
         retry_backoff: float = 0.5,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -158,6 +159,8 @@ class WeComCustomerClient:
             raise ConfigurationError("timeout 必须大于零")
         if qps <= 0:
             raise ConfigurationError("qps 必须大于零")
+        if request_concurrency < 1:
+            raise ConfigurationError("request_concurrency 必须至少为 1")
         if max_retries < 0:
             raise ConfigurationError("max_retries 不能为负数")
         if retry_backoff < 0:
@@ -167,6 +170,8 @@ class WeComCustomerClient:
         self._auth = WeComAuth(corp_id=corp_id, secret=secret, base_url=base_url)
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
+        self._request_concurrency = request_concurrency
+        self._request_semaphore = asyncio.Semaphore(request_concurrency)
         base_transport = transport or httpx.AsyncHTTPTransport(proxy=proxy)
         self._http = httpx.AsyncClient(
             base_url=base_url,
@@ -198,32 +203,32 @@ class WeComCustomerClient:
 
     async def iter_customer_details(
         self, userids: Sequence[str], *, limit: int = 100
-    ) -> AsyncIterator[CustomerDetailItem]:
-        """逐个返回指定成员所跟进客户的详情。"""
+    ) -> AsyncIterator[list[CustomerDetailItem]]:
+        """按页返回一个成员分组所跟进客户的详情。"""
 
+        if not 1 <= len(userids) <= 100:
+            raise ConfigurationError("客户成员分组大小必须在 1 到 100 之间")
         if not 1 <= limit <= 100:
             raise ConfigurationError("客户分页大小必须在 1 到 100 之间")
-        for userid_list in _chunks(userids, 100):
-            cursor = ""
-            seen_cursors: set[str] = set()
-            while True:
-                body: dict[str, Any] = {"userid_list": userid_list, "limit": limit}
-                if cursor:
-                    body["cursor"] = cursor
-                response = await self._request(
-                    "POST",
-                    "/cgi-bin/externalcontact/batch/get_by_user",
-                    CustomerPageResponse,
-                    json=body,
-                )
-                for item in response.external_contact_list:
-                    yield item
-                cursor = response.next_cursor
-                if not cursor:
-                    break
-                if cursor in seen_cursors:
-                    raise WeComTransportError("企业微信返回了重复的客户分页游标")
-                seen_cursors.add(cursor)
+        cursor = ""
+        seen_cursors: set[str] = set()
+        while True:
+            body: dict[str, Any] = {"userid_list": list(userids), "limit": limit}
+            if cursor:
+                body["cursor"] = cursor
+            response = await self._request(
+                "POST",
+                "/cgi-bin/externalcontact/batch/get_by_user",
+                CustomerPageResponse,
+                json=body,
+            )
+            yield response.external_contact_list
+            cursor = response.next_cursor
+            if not cursor:
+                break
+            if cursor in seen_cursors:
+                raise WeComTransportError("企业微信返回了重复的客户分页游标")
+            seen_cursors.add(cursor)
 
     async def iter_group_chat_summaries(
         self, owner_userids: Sequence[str], *, limit: int = 1000
@@ -279,7 +284,8 @@ class WeComCustomerClient:
     ) -> _ResponseModel:
         for attempt in range(self._max_retries + 1):
             try:
-                response = await self._http.request(method, path, json=json)
+                async with self._request_semaphore:
+                    response = await self._http.request(method, path, json=json)
                 if response.status_code in _RETRYABLE_STATUS_CODES and attempt < self._max_retries:
                     await self._backoff(attempt)
                     continue
