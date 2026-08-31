@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wecom-archive"
+version = "0.1.0"
+description = "WeCom customer directory and conversation archive integration"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "alembic>=1.13,<2",
+    "httpx>=0.27,<1",
+    "platformdirs>=4.3,<5",
+    "sqlalchemy>=2.0,<3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.9,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wecom_archive"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-p", "no:cacheprovider"]
+markers = [
+    "integration: calls the real WeCom API using a non-production enterprise",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
