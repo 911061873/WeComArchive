@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "wecom-archive"
 version = "0.1.0"
-description = "WeCom customer directory and conversation archive integration"
+description = "企业微信客户联系资料目录与会话存档集成"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
@@ -36,7 +36,7 @@ testpaths = ["tests"]
 addopts = ["-p", "no:cacheprovider"]
 asyncio_mode = "auto"
 markers = [
-    "integration: calls the real WeCom API using a non-production enterprise",
+    "integration: 使用非生产企业调用真实的企业微信 API",
 ]
 
 [tool.ruff]

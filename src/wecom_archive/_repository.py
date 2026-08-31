@@ -266,7 +266,7 @@ class CustomerDirectoryRepository:
     async def _complete_run(session: AsyncSession, run_id: str, seen_count: int) -> None:
         run = await session.get(SyncRun, run_id)
         if run is None:
-            raise RuntimeError(f"Unknown sync run: {run_id}")
+            raise RuntimeError(f"未知的同步运行记录：{run_id}")
         run.status = "succeeded"
         run.finished_at = _now()
         run.seen_count = seen_count

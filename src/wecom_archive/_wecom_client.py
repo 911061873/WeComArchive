@@ -31,7 +31,7 @@ def _chunks(values: Sequence[str], size: int) -> list[list[str]]:
 
 
 class _AsyncRateLimiter:
-    """Space acquisitions evenly to enforce a per-client QPS ceiling."""
+    """均匀安排请求许可时间，以限制单个客户端的 QPS 上限。"""
 
     def __init__(self, qps: float) -> None:
         self._interval = 1.0 / qps
@@ -49,7 +49,7 @@ class _AsyncRateLimiter:
 
 
 class _RateLimitedTransport(httpx.AsyncBaseTransport):
-    """Apply one shared limit to every actual outbound HTTP request."""
+    """对每个实际发出的 HTTP 请求应用同一个限流器。"""
 
     def __init__(self, transport: httpx.AsyncBaseTransport, qps: float) -> None:
         self._transport = transport
@@ -64,15 +64,15 @@ class _RateLimitedTransport(httpx.AsyncBaseTransport):
 
 
 class WeComAuth(httpx.Auth):
-    """Acquire and inject an in-memory WeCom access token."""
+    """获取仅存于内存的企业微信访问令牌，并将其注入请求。"""
 
     requires_response_body = True
 
     def __init__(self, *, corp_id: str, secret: str, base_url: str) -> None:
         if not corp_id.strip():
-            raise ConfigurationError("corp_id must not be empty")
+            raise ConfigurationError("corp_id 不能为空")
         if not secret.strip():
-            raise ConfigurationError("secret must not be empty")
+            raise ConfigurationError("secret 不能为空")
         self._corp_id = corp_id
         self._secret = secret
         self._token_url = httpx.URL(base_url).join("/cgi-bin/gettoken")
@@ -102,7 +102,7 @@ class WeComAuth(httpx.Auth):
     def redact(self, value: str) -> str:
         for sensitive in (self._secret, self._token):
             if sensitive:
-                value = value.replace(sensitive, "[REDACTED]")
+                value = value.replace(sensitive, "[已脱敏]")
         return value
 
     def _cached_token(self) -> str | None:
@@ -128,18 +128,18 @@ class WeComAuth(httpx.Auth):
             response.raise_for_status()
             payload = TokenResponse.model_validate(response.json())
         except (httpx.HTTPError, ValueError, ValidationError):
-            raise WeComTransportError("WeCom request failed for /cgi-bin/gettoken") from None
+            raise WeComTransportError("企业微信请求失败：/cgi-bin/gettoken") from None
         if payload.errcode != 0:
-            raise WeComApiError(payload.errcode, self.redact(payload.errmsg or "unknown error"))
+            raise WeComApiError(payload.errcode, self.redact(payload.errmsg or "未知错误"))
         if not payload.access_token:
-            raise WeComTransportError("WeCom returned an invalid access-token response")
+            raise WeComTransportError("企业微信返回了无效的访问令牌响应")
         self._token = payload.access_token
         self._token_expires_at = time.monotonic() + max(0, payload.expires_in - 90)
         return payload.access_token
 
 
 class WeComCustomerClient:
-    """Asynchronous adapter around the WeCom customer-contact REST API."""
+    """企业微信客户联系 REST API 的异步适配器。"""
 
     def __init__(
         self,
@@ -155,13 +155,13 @@ class WeComCustomerClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if timeout <= 0:
-            raise ConfigurationError("timeout must be greater than zero")
+            raise ConfigurationError("timeout 必须大于零")
         if qps <= 0:
-            raise ConfigurationError("qps must be greater than zero")
+            raise ConfigurationError("qps 必须大于零")
         if max_retries < 0:
-            raise ConfigurationError("max_retries must not be negative")
+            raise ConfigurationError("max_retries 不能为负数")
         if retry_backoff < 0:
-            raise ConfigurationError("retry_backoff must not be negative")
+            raise ConfigurationError("retry_backoff 不能为负数")
         self._corp_id = corp_id
         self._proxy = proxy
         self._auth = WeComAuth(corp_id=corp_id, secret=secret, base_url=base_url)
@@ -189,6 +189,8 @@ class WeComCustomerClient:
         await self._http.aclose()
 
     async def get_follow_users(self) -> list[str]:
+        """返回已配置客户联系功能的成员用户 ID。"""
+
         response = await self._request(
             "GET", "/cgi-bin/externalcontact/get_follow_user_list", FollowUsersResponse
         )
@@ -197,8 +199,10 @@ class WeComCustomerClient:
     async def iter_customer_details(
         self, userids: Sequence[str], *, limit: int = 100
     ) -> AsyncIterator[CustomerDetailItem]:
+        """逐个返回指定成员所跟进客户的详情。"""
+
         if not 1 <= limit <= 100:
-            raise ConfigurationError("customer page limit must be between 1 and 100")
+            raise ConfigurationError("客户分页大小必须在 1 到 100 之间")
         for userid_list in _chunks(userids, 100):
             cursor = ""
             seen_cursors: set[str] = set()
@@ -218,14 +222,16 @@ class WeComCustomerClient:
                 if not cursor:
                     break
                 if cursor in seen_cursors:
-                    raise WeComTransportError("WeCom returned a repeated customer cursor")
+                    raise WeComTransportError("企业微信返回了重复的客户分页游标")
                 seen_cursors.add(cursor)
 
     async def iter_group_chat_summaries(
         self, owner_userids: Sequence[str], *, limit: int = 1000
     ) -> AsyncIterator[GroupChatSummary]:
+        """逐个返回由指定成员担任群主的活跃客户群摘要。"""
+
         if not 1 <= limit <= 1000:
-            raise ConfigurationError("group-chat page limit must be between 1 and 1000")
+            raise ConfigurationError("客户群分页大小必须在 1 到 1000 之间")
         for userid_list in _chunks(owner_userids, 100):
             cursor = ""
             seen_cursors: set[str] = set()
@@ -249,10 +255,12 @@ class WeComCustomerClient:
                 if not cursor:
                     break
                 if cursor in seen_cursors:
-                    raise WeComTransportError("WeCom returned a repeated group-chat cursor")
+                    raise WeComTransportError("企业微信返回了重复的客户群分页游标")
                 seen_cursors.add(cursor)
 
     async def get_group_chat(self, chat_id: str) -> GroupChatDetail:
+        """返回指定客户群的详情，其中包含群成员名称。"""
+
         response = await self._request(
             "POST",
             "/cgi-bin/externalcontact/groupchat/get",
@@ -288,15 +296,15 @@ class WeComCustomerClient:
                 if attempt < self._max_retries:
                     await self._backoff(attempt)
                     continue
-                raise WeComTransportError(f"WeCom request failed for {path}") from None
+                raise WeComTransportError(f"企业微信请求失败：{path}") from None
             except WeComTransportError:
                 if attempt < self._max_retries:
                     await self._backoff(attempt)
                     continue
                 raise
             except (httpx.HTTPError, ValueError, ValidationError):
-                raise WeComTransportError(f"WeCom request failed for {path}") from None
-        raise AssertionError("unreachable")
+                raise WeComTransportError(f"企业微信请求失败：{path}") from None
+        raise AssertionError("不应执行到此处")
 
     async def _backoff(self, attempt: int) -> None:
         if self._retry_backoff:
@@ -305,7 +313,7 @@ class WeComCustomerClient:
     def _raise_for_api_error(self, payload: ApiResponse) -> None:
         if payload.errcode == 0:
             return
-        raw_message = self._auth.redact((payload.errmsg or "unknown error")[:300])
+        raw_message = self._auth.redact((payload.errmsg or "未知错误")[:300])
         if self._proxy:
-            raw_message = raw_message.replace(self._proxy, "[REDACTED]")
+            raw_message = raw_message.replace(self._proxy, "[已脱敏]")
         raise WeComApiError(payload.errcode, raw_message)

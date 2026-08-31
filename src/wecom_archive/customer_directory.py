@@ -32,19 +32,19 @@ class _DirectoryConfig(BaseModel):
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("must not be blank")
+            raise ValueError("不能为空白字符串")
         return value
 
     @field_validator("secret")
     @classmethod
     def secret_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
-            raise ValueError("must not be blank")
+            raise ValueError("不能为空白字符串")
         return value
 
 
 class CustomerContactDirectory:
-    """Asynchronously synchronize and query the local customer-contact directory."""
+    """异步同步并查询本地客户联系资料目录。"""
 
     def __init__(
         self,
@@ -152,12 +152,12 @@ class CustomerContactDirectory:
 
     async def _ensure_initialized(self) -> None:
         if self._closed:
-            raise RuntimeError("CustomerContactDirectory is closed")
+            raise RuntimeError("CustomerContactDirectory 已关闭")
         if self._initialized:
             return
         async with self._initialize_lock:
             if self._closed:
-                raise RuntimeError("CustomerContactDirectory is closed")
+                raise RuntimeError("CustomerContactDirectory 已关闭")
             if not self._initialized:
                 try:
                     await upgrade_database(self._database_url)

@@ -14,7 +14,8 @@ def _required_environment() -> tuple[str, str]:
     secret = os.environ.get("WECOM_CUSTOMER_CONTACT_SECRET")
     if not corp_id or not secret:
         pytest.skip(
-            "Real WeCom integration test requires WECOM_CORP_ID and WECOM_CUSTOMER_CONTACT_SECRET"
+            "企业微信真实集成测试需要配置 WECOM_CORP_ID 和 "
+            "WECOM_CUSTOMER_CONTACT_SECRET"
         )
     return corp_id, secret
 
@@ -32,7 +33,7 @@ def _open_directory(data_dir: Path) -> CustomerContactDirectory:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_real_customer_and_group_chat_sync_is_repeatable() -> None:
-    """Run two complete scans against the configured non-production enterprise."""
+    """针对已配置的非生产企业执行两次完整扫描。"""
     data_dir = Path.cwd() / ".integration-test-data"
     async with _open_directory(data_dir) as directory:
         first_customers, first_groups = await directory.sync_all_once()
@@ -57,7 +58,7 @@ async def test_real_customer_and_group_chat_sync_is_repeatable() -> None:
             assert group_chat is not None
             assert group_chat.is_active is True
 
-    # Reopening exercises the packaged Alembic migration against the same database.
+    # 重新打开资料目录，以验证包内 Alembic 迁移可在同一数据库上重复执行。
     async with _open_directory(data_dir) as reopened:
         expected_customer = os.environ.get("WECOM_TEST_EXTERNAL_USERID")
         if expected_customer:
@@ -67,7 +68,7 @@ async def test_real_customer_and_group_chat_sync_is_repeatable() -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_real_customer_client_supports_async_requests() -> None:
-    """Exercise AsyncClient authentication and one customer-contact endpoint."""
+    """验证 AsyncClient 鉴权以及一个客户联系接口。"""
     corp_id, secret = _required_environment()
 
     async with WeComCustomerClient(

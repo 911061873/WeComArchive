@@ -2,19 +2,19 @@ import re
 
 
 class WeComArchiveError(Exception):
-    """Base class for stable public exceptions."""
+    """稳定公开异常的基类。"""
 
 
 class ConfigurationError(WeComArchiveError):
-    """Raised when public configuration is invalid."""
+    """公开配置无效时抛出。"""
 
 
 class WeComTransportError(WeComArchiveError):
-    """Raised when WeCom cannot be reached or returns an invalid response."""
+    """无法连接企业微信或企业微信返回无效响应时抛出。"""
 
 
 class WeComApiError(WeComArchiveError):
-    """Raised when WeCom returns a non-zero errcode."""
+    """企业微信返回非零 errcode 时抛出。"""
 
     def __init__(self, errcode: int, errmsg: str) -> None:
         self.errcode = errcode

@@ -1,4 +1,4 @@
-"""Create customer directory tables."""
+"""创建客户联系资料目录表。"""
 
 from alembic import op
 
