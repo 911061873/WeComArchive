@@ -33,7 +33,7 @@
 - 以 `CustomerContactDirectory` 作为独立公共组件，统一协调客户、客户群和群成员资料的同步与本地查询。
 - 首版只支持企业内部自建应用认证，初始化时接收企业 `corp_id` 和“客户联系 Secret”；第三方服务商授权模式不在首个里程碑范围内。
 - 内部按职责拆分客户同步、客户群同步和资料仓储；具体企业微信 API 调用顺序必须在实现前依据官方文档确认。
-- 提供 `sync_all_once()` 同步全部客户联系资料，并允许通过 `sync_customers_once()` 和 `sync_group_chats_once()` 分别触发客户或客户群同步。
+- 提供异步 `sync_all_once()` 同步全部客户联系资料，并允许通过异步 `sync_customers_once()` 和 `sync_group_chats_once()` 分别触发客户或客户群同步；查询与资源释放接口同样为异步。
 - 负责持久化客户、客户群、群成员关系、各自同步检查点和最后同步时间。
 - 与会话存档模块共享数据库基础设施，但独立持有客户联系 REST API 所需的凭据、httpx 客户端、可选代理配置、同步状态和错误处理。
 - `WeComArchive` 始终保存消息中的原始成员 ID、客户 ID 和群 ID，不在消息归档链路中实时请求客户联系 API。
@@ -41,22 +41,24 @@
 
 ### 数据库兼容
 
-- 使用 SQLAlchemy 2.x ORM 隔离数据库方言差异，使用 Alembic 管理数据库迁移。
+- 使用 SQLAlchemy 2.x 异步 ORM 隔离数据库方言差异，使用 Alembic 管理数据库迁移。
 - 首版目标数据库为 SQLite、MySQL 和 PostgreSQL。
-- 未提供数据库配置时自动创建默认 SQLite 连接，但仍完整使用 SQLAlchemy ORM 和 Alembic，便于本地试用和小型演示。
+- 未提供数据库配置时自动创建基于 `aiosqlite` 的 SQLite 连接；MySQL 和 PostgreSQL 分别使用 `asyncmy` 与 `asyncpg`，仍完整使用 SQLAlchemy ORM 和 Alembic。
 - 生产环境可以显式配置 MySQL 或 PostgreSQL。
 - 数据模型、迁移和测试不得依赖某一种数据库专有能力，必要的差异应集中封装。
 - 默认 SQLite 的并发限制仍需进一步验证。
-- `CustomerContactDirectory` 初始化时自动通过 Alembic 将数据库升级到当前 schema；迁移失败则初始化失败。默认 SQLite 与显式数据库 URL 使用相同迁移路径。
+- `CustomerContactDirectory` 首次进入异步上下文或首次执行公开异步方法时，通过异步连接运行 Alembic 并升级到当前 schema；迁移失败则不执行资料同步。默认 SQLite 与显式数据库 URL 使用相同迁移路径。
 - 初始化时可以配置 `data_dir`；未配置时使用操作系统规范的用户数据目录。
 - 默认 SQLite 数据库文件和本地附件根目录均位于 `data_dir` 下，使用相互独立的子路径。
 
 ### 网络访问与代理
 
-- `CustomerContactDirectory` 调用客户和客户群 REST API 时使用 httpx；异步数据流优先使用 `httpx.AsyncClient`。
+- `CustomerContactDirectory` 调用客户和客户群 REST API 时只使用 `httpx.AsyncClient`。
 - `CustomerContactDirectory` 可以接收可选的 HTTP 代理配置，用于满足相关接口 IP 白名单场景下的固定出口需求。
-- 其同步与异步 REST API 请求分别复用统一配置的 `httpx.Client` 和惰性创建的 `httpx.AsyncClient`，以统一代理、超时、连接池与重试边界；现有同步 API 保持兼容，异步 API 使用明确的 `async_*` 方法和 `aclose()` 生命周期。
-- 企业内部自建应用的访问令牌获取、缓存、并发刷新和令牌失效重试由独立的 `httpx.Auth` 实现负责；该认证类同时实现 HTTPX 的同步与异步认证流，客户联系 API 客户端只处理业务请求和最终业务错误响应。
+- REST API 请求复用统一配置的 `httpx.AsyncClient`，统一代理、超时和连接池边界；公开 API 直接使用业务名称并通过 `await` 调用，以 `aclose()` 管理生命周期。
+- `CustomerContactDirectory` 接收 `qps` 配置，默认值为 50。限流位于 HTTP transport 边界，以平滑间隔约束单个 client 实例的真实出站请求；token 获取、业务请求及每次重试共享同一配额。
+- 企业内部自建应用鉴权由独立的异步 `httpx.Auth` 实现负责，只处理访问令牌获取、进程内缓存、并发刷新、请求注入和主动失效；token 不写入数据库。token 失效后的业务请求重放、可重试 HTTP 状态和传输故障重试统一由 `WeComCustomerClient` 负责。
+- Pydantic 用于初始化配置、企业微信响应结构和公开只读数据对象校验；校验失败在网络边界转换为不泄露响应敏感内容的稳定异常。
 - 代理地址可能包含认证信息，必须按敏感配置处理，不得出现在日志或异常文本中。
 - `WeComArchive` 不提供 HTTP 服务，也不使用 httpx；会话拉取、解密和附件下载均通过企业微信会话存档 SDK 适配层完成。
 - 会话存档 SDK 自身的网络要求和可配置能力必须依据官方文档或技术验证确定，不与 `CustomerContactDirectory` 的 HTTP 代理配置混用。

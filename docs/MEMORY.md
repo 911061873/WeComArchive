@@ -19,8 +19,8 @@
 - 首个交付里程碑是完成客户、跟进关系、客户群、群成员和群管理员的可恢复全量同步；完整扫描后仅软标记本轮未见资料，不物理删除。
 - 会话消息始终保存原始成员 ID、客户 ID 和群 ID，并在查询或处理阶段关联本地资料目录；资料暂缺或同步失败不得阻塞会话归档。
 - `WeComArchive` 初始化时必须传入企业微信会话存档凭据，数据库配置可选；它不提供 HTTP 服务，也不使用 httpx，会话拉取、解密和附件下载均通过企业微信会话存档 SDK 完成。
-- `CustomerContactDirectory` 使用 httpx 调用客户和客户群 REST API，独立管理相关凭据及可选 HTTP 代理；异步数据流优先使用 `httpx.AsyncClient`。
-- 持久化层统一使用 SQLAlchemy 2.x ORM 和 Alembic，首版支持 SQLite、MySQL 和 PostgreSQL；未配置数据库时自动使用 SQLite，但不绕过 ORM。
+- `CustomerContactDirectory` 只使用 `httpx.AsyncClient` 调用客户和客户群 REST API，数据库访问也统一使用 SQLAlchemy 异步引擎与会话。
+- 持久化层统一使用 SQLAlchemy 2.x 异步 ORM 和 Alembic，首版支持 SQLite、MySQL 和 PostgreSQL；未配置数据库时自动使用 `aiosqlite`，但不绕过 ORM。
 - `WeComArchive` 采用长期运行模型，在初始化和注册处理器后按配置间隔持续轮询新消息；外部系统只负责启动、守护和重启进程。
 - 长期运行入口为阻塞式 `run_forever()`，程序内可调用 `stop()` 请求优雅退出并释放资源。
 - 优雅停止会等待当前消息完成持久化和本轮处理器调用，不再开始下一轮轮询。
@@ -38,7 +38,10 @@
 - 首版只内置本地文件存储，不内置第三方对象存储适配器。
 - 尚未确定附件写入与数据库事务的一致性策略和部署方式。
 - 已实现客户和客户群的分页全量同步、SQLAlchemy 持久化、Alembic 自动迁移、本地只读查询、失败扫描保护和敏感信息脱敏；不再保留模拟企业微信响应的测试。
-- 客户联系内部自建应用鉴权已封装为独立的 `httpx.Auth` 实现，同时支持同步与异步认证流，集中负责访问令牌缓存、并发刷新和令牌失效后的单次请求重放；`WeComCustomerClient` 保留同步 API，并提供对应的 `async_*` API 和 `aclose()`。
+- 客户联系配置、企业微信响应和公开数据对象使用 Pydantic 校验。
+- 客户联系内部自建应用鉴权已封装为只负责鉴权的异步 `httpx.Auth`；token 仅在进程内存中缓存，不写入数据库。token 失效重放以及临时 HTTP/传输故障重试集中由 `WeComCustomerClient` 处理。
+- `CustomerContactDirectory` 和 `WeComCustomerClient` 只提供异步 I/O API，通过异步上下文管理器或 `aclose()` 释放资源。
+- 客户联系 HTTP 请求在 transport 边界执行平滑 QPS 限流，单个客户端实例默认 QPS 为 50；token 获取、业务请求和重试共享配额。
 
 ## 下次讨论重点
 

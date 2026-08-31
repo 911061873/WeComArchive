@@ -27,7 +27,9 @@
 
 - 开发语言与版本：Python 3.10
 - 项目与依赖管理：uv
-- 客户联系 REST API 客户端：httpx
+- 客户联系 REST API 客户端：httpx（异步）
+- 数据校验：Pydantic 2
+- ORM 与数据库访问：SQLAlchemy 2.x（异步）
 - 应用框架、部署方式和基础设施：待确定
 
 ## 客户联系资料同步
@@ -35,18 +37,25 @@
 首个交付模块只支持企业内部自建应用。需要企业 ID（`corp_id`）以及管理后台“客户联系”范围的 Secret：
 
 ```python
+import asyncio
+
 from wecom_archive import CustomerContactDirectory
 
-with CustomerContactDirectory(
-    corp_id="your-corp-id",
-    secret="your-customer-contact-secret",
-) as directory:
-    customer_result, group_result = directory.sync_all_once()
-    customer = directory.get_customer("external-user-id")
-    group_chat = directory.get_group_chat("group-chat-id")
+
+async def main() -> None:
+    async with CustomerContactDirectory(
+        corp_id="your-corp-id",
+        secret="your-customer-contact-secret",
+    ) as directory:
+        customer_result, group_result = await directory.sync_all_once()
+        customer = await directory.get_customer("external-user-id")
+        group_chat = await directory.get_group_chat("group-chat-id")
+
+
+asyncio.run(main())
 ```
 
-未传入 `database_url` 时会在操作系统用户数据目录中创建 SQLite 数据库。也可以显式传入 SQLAlchemy 数据库 URL，或通过 `proxy` 为客户联系 REST API 配置 HTTP 代理。Secret、访问令牌及带认证信息的代理地址不得写入日志。
+未传入 `database_url` 时会在操作系统用户数据目录中创建 SQLite 数据库。也可以显式传入 SQLAlchemy 数据库 URL，组件会为 SQLite、MySQL 和 PostgreSQL 选择异步驱动；MySQL 和 PostgreSQL 分别需要安装 `mysql`、`postgresql` 可选依赖。可通过 `proxy` 为客户联系 REST API 配置 HTTP 代理，通过 `qps` 调整单个客户端实例的平滑请求速率上限，默认值为 `50`。token 获取、业务请求和重试都会计入 QPS。Secret、仅保存在进程内存中的访问令牌及带认证信息的代理地址不得写入日志。
 
 ### 真实接口测试
 

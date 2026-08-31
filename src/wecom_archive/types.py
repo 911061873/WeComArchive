@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclass(frozen=True)
-class FollowRecord:
+class _PublicModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+class FollowRecord(_PublicModel):
     userid: str
     remark: str | None
     description: str | None
@@ -16,8 +20,7 @@ class FollowRecord:
     raw_data: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class CustomerRecord:
+class CustomerRecord(_PublicModel):
     external_userid: str
     name: str | None
     avatar: str | None
@@ -29,8 +32,7 @@ class CustomerRecord:
     raw_data: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class GroupMemberRecord:
+class GroupMemberRecord(_PublicModel):
     userid: str
     type: int
     name: str | None
@@ -42,8 +44,7 @@ class GroupMemberRecord:
     raw_data: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class GroupChatRecord:
+class GroupChatRecord(_PublicModel):
     chat_id: str
     name: str | None
     owner: str | None
@@ -56,8 +57,7 @@ class GroupChatRecord:
     raw_data: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class SyncResult:
+class SyncResult(_PublicModel):
     run_id: str
-    domain: str
+    domain: Literal["customers", "group_chats"]
     seen_count: int
