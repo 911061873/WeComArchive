@@ -33,7 +33,7 @@ packages = ["src/wecom_archive"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-p", "no:cacheprovider"]
+addopts = ["-p", "no:cacheprovider", "--basetemp=.pytest-tmp"]
 asyncio_mode = "auto"
 markers = [
     "integration: 使用非生产企业调用真实的企业微信 API",
