@@ -34,6 +34,8 @@
 
 ## 客户联系资料同步
 
+客户联系相关实现集中在 `wecom_archive.customer_sync` 子包中，与后续会话存档实现保持独立。为保持简洁且稳定的公共入口，`CustomerContactDirectory` 及其公开数据类型和异常仍可直接从 `wecom_archive` 导入。
+
 首个交付模块只支持企业内部自建应用。需要企业 ID（`corp_id`）以及管理后台“客户联系”范围的 Secret：
 
 ```python

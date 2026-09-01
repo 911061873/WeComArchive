@@ -6,8 +6,8 @@ import time
 import httpx
 import pytest
 
-from wecom_archive._wecom_client import WeComCustomerClient
-from wecom_archive.exceptions import ConfigurationError, WeComTransportError
+from wecom_archive.customer_sync.client import WeComCustomerClient
+from wecom_archive.customer_sync.exceptions import ConfigurationError, WeComTransportError
 
 
 @pytest.mark.asyncio

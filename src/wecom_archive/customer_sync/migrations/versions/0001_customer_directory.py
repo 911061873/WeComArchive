@@ -2,7 +2,7 @@
 
 from alembic import op
 
-from wecom_archive._models import Base
+from wecom_archive.customer_sync.models import Base
 
 revision = "0001_customer_directory"
 down_revision = None

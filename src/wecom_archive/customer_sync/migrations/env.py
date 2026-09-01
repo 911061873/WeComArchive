@@ -1,7 +1,7 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from wecom_archive._models import Base
+from wecom_archive.customer_sync.models import Base
 
 config = context.config
 target_metadata = Base.metadata

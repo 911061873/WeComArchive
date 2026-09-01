@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wecom_archive import CustomerContactDirectory
-from wecom_archive._wecom_client import WeComCustomerClient
+from wecom_archive.customer_sync.client import WeComCustomerClient
 
 
 def _required_environment() -> tuple[str, str]:

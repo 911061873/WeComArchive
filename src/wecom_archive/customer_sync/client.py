@@ -8,7 +8,8 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from ._schemas import (
+from .exceptions import ConfigurationError, WeComApiError, WeComTransportError
+from .schemas import (
     ApiResponse,
     CustomerDetailItem,
     CustomerPageResponse,
@@ -19,7 +20,6 @@ from ._schemas import (
     GroupChatSummary,
     TokenResponse,
 )
-from .exceptions import ConfigurationError, WeComApiError, WeComTransportError
 
 _TOKEN_ERROR_CODES = {40014, 42001}
 _RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}

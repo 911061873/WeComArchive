@@ -1,14 +1,18 @@
-from .customer_sync import (
+"""客户、客户群及群成员资料同步。"""
+
+from .directory import CustomerContactDirectory
+from .exceptions import (
     ConfigurationError,
-    CustomerContactDirectory,
+    WeComApiError,
+    WeComArchiveError,
+    WeComTransportError,
+)
+from .types import (
     CustomerRecord,
     FollowRecord,
     GroupChatRecord,
     GroupMemberRecord,
     SyncResult,
-    WeComApiError,
-    WeComArchiveError,
-    WeComTransportError,
 )
 
 __all__ = [

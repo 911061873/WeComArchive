@@ -8,9 +8,9 @@ from uuid import uuid4
 from sqlalchemy import select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from ._models import Customer, CustomerFollow, GroupAdmin, GroupChat, GroupMember, SyncRun
-from ._schemas import CustomerDetailItem, GroupChatDetail, GroupChatSummary
-from ._schemas import GroupMember as Member
+from .models import Customer, CustomerFollow, GroupAdmin, GroupChat, GroupMember, SyncRun
+from .schemas import CustomerDetailItem, GroupChatDetail, GroupChatSummary
+from .schemas import GroupMember as Member
 from .types import (
     CustomerRecord,
     FollowRecord,

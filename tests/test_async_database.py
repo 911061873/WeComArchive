@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from wecom_archive._database import normalize_async_database_url, upgrade_database
-from wecom_archive._repository import CustomerDirectoryRepository
-from wecom_archive._schemas import CustomerDetailItem
+from wecom_archive.customer_sync.database import normalize_async_database_url, upgrade_database
+from wecom_archive.customer_sync.repository import CustomerDirectoryRepository
+from wecom_archive.customer_sync.schemas import CustomerDetailItem
 
 
 def test_normalize_async_database_urls() -> None:

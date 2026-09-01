@@ -7,11 +7,11 @@ from typing import Any
 from platformdirs import user_data_path
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, SecretStr, field_validator
 
-from ._database import normalize_async_database_url, upgrade_database
-from ._repository import CustomerDirectoryRepository
-from ._schemas import GroupChatSummary
-from ._wecom_client import WeComCustomerClient
+from .client import WeComCustomerClient
+from .database import normalize_async_database_url, upgrade_database
 from .exceptions import WeComArchiveError
+from .repository import CustomerDirectoryRepository
+from .schemas import GroupChatSummary
 from .types import CustomerRecord, GroupChatRecord, SyncResult
 
 

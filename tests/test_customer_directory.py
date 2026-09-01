@@ -5,9 +5,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from wecom_archive._schemas import CustomerDetailItem
-from wecom_archive.customer_directory import CustomerContactDirectory
-from wecom_archive.types import SyncResult
+from wecom_archive.customer_sync import CustomerContactDirectory, SyncResult
+from wecom_archive.customer_sync.schemas import CustomerDetailItem
 
 
 def _customer_item(external_userid: str, userid: str) -> CustomerDetailItem:
