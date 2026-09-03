@@ -164,3 +164,97 @@ async def test_customer_details_reject_invalid_user_group_size() -> None:
             _ = [page async for page in client.iter_customer_details([])]
         with pytest.raises(ConfigurationError):
             _ = [page async for page in client.iter_customer_details([str(i) for i in range(101)])]
+
+
+@pytest.mark.asyncio
+async def test_update_customer_remark_sends_all_supported_fields() -> None:
+    request_body: dict[str, object] | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_body
+        if request.url.path == "/cgi-bin/gettoken":
+            return httpx.Response(
+                200, json={"errcode": 0, "access_token": "token", "expires_in": 7200}
+            )
+        assert request.method == "POST"
+        assert request.url.path == "/cgi-bin/externalcontact/remark"
+        request_body = json.loads(request.content)
+        return httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+
+    async with WeComCustomerClient(
+        corp_id="corp",
+        secret="secret",
+        qps=10_000,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await client.update_customer_remark(
+            "alice",
+            "customer-1",
+            remark="重要客户",
+            description="来自官网",
+            remark_company="示例科技",
+            remark_mobiles=["13800000001", "13800000002"],
+            remark_pic_mediaid="media-id",
+        )
+
+    assert result is None
+    assert request_body == {
+        "userid": "alice",
+        "external_userid": "customer-1",
+        "remark": "重要客户",
+        "description": "来自官网",
+        "remark_company": "示例科技",
+        "remark_mobiles": ["13800000001", "13800000002"],
+        "remark_pic_mediaid": "media-id",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_customer_remark_preserves_empty_values_for_clearing() -> None:
+    request_body: dict[str, object] | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_body
+        if request.url.path == "/cgi-bin/gettoken":
+            return httpx.Response(
+                200, json={"errcode": 0, "access_token": "token", "expires_in": 7200}
+            )
+        request_body = json.loads(request.content)
+        return httpx.Response(200, json={"errcode": 0})
+
+    async with WeComCustomerClient(
+        corp_id="corp",
+        secret="secret",
+        qps=10_000,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        await client.update_customer_remark(
+            "alice",
+            "customer-1",
+            remark="",
+            remark_mobiles=[""],
+        )
+
+    assert request_body == {
+        "userid": "alice",
+        "external_userid": "customer-1",
+        "remark": "",
+        "remark_mobiles": [""],
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_customer_remark_validates_required_updates_and_lengths() -> None:
+    async with WeComCustomerClient(
+        corp_id="corp",
+        secret="secret",
+        transport=httpx.MockTransport(lambda _: httpx.Response(500)),
+    ) as client:
+        with pytest.raises(ConfigurationError, match="至少需要提供"):
+            await client.update_customer_remark("alice", "customer-1")
+        with pytest.raises(ConfigurationError, match="remark 最多"):
+            await client.update_customer_remark("alice", "customer-1", remark="x" * 21)
+        with pytest.raises(ConfigurationError, match="description 最多"):
+            await client.update_customer_remark("alice", "customer-1", description="x" * 151)
+        with pytest.raises(ConfigurationError, match="remark_company 最多"):
+            await client.update_customer_remark("alice", "customer-1", remark_company="x" * 21)

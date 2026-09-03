@@ -274,6 +274,64 @@ class WeComCustomerClient:
         )
         return response.group_chat
 
+    async def update_customer_remark(
+        self,
+        userid: str,
+        external_userid: str,
+        *,
+        remark: str | None = None,
+        description: str | None = None,
+        remark_company: str | None = None,
+        remark_mobiles: Sequence[str] | None = None,
+        remark_pic_mediaid: str | None = None,
+    ) -> None:
+        """修改指定成员为客户设置的备注信息。"""
+
+        if not userid.strip():
+            raise ConfigurationError("userid 不能为空")
+        if not external_userid.strip():
+            raise ConfigurationError("external_userid 不能为空")
+        if all(
+            value is None
+            for value in (
+                remark,
+                description,
+                remark_company,
+                remark_mobiles,
+                remark_pic_mediaid,
+            )
+        ):
+            raise ConfigurationError("至少需要提供一项客户备注信息")
+        if remark is not None and len(remark) > 20:
+            raise ConfigurationError("remark 最多包含 20 个字符")
+        if description is not None and len(description) > 150:
+            raise ConfigurationError("description 最多包含 150 个字符")
+        if remark_company is not None and len(remark_company) > 20:
+            raise ConfigurationError("remark_company 最多包含 20 个字符")
+
+        body: dict[str, Any] = {
+            "userid": userid,
+            "external_userid": external_userid,
+        }
+        optional_fields: tuple[tuple[str, Any], ...] = (
+            ("remark", remark),
+            ("description", description),
+            ("remark_company", remark_company),
+            (
+                "remark_mobiles",
+                list(remark_mobiles) if remark_mobiles is not None else None,
+            ),
+            ("remark_pic_mediaid", remark_pic_mediaid),
+        )
+        body.update((name, value) for name, value in optional_fields if value is not None)
+
+        await self._request(
+            "POST",
+            "/cgi-bin/externalcontact/remark",
+            ApiResponse,
+            json=body,
+        )
+
     async def _request(
         self,
         method: str,
