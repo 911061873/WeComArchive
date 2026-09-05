@@ -11,8 +11,17 @@ from pydantic import BaseModel, ValidationError
 from .exceptions import ConfigurationError, WeComApiError, WeComTransportError
 from .schemas import (
     ApiResponse,
-    CustomerDetailItem,
-    CustomerPageResponse,
+    CustomerStrategy,
+    CustomerStrategyCreateResponse,
+    CustomerStrategyListResponse,
+    CustomerStrategyPrivilege,
+    CustomerStrategyRange,
+    CustomerStrategyRangeResponse,
+    CustomerStrategyResponse,
+    CustomerStrategySummary,
+    ExternalContactListResponse,
+    ExternalContactPageResponse,
+    ExternalContactResponse,
     FollowUsersResponse,
     GroupChatDetail,
     GroupChatPageResponse,
@@ -172,6 +181,7 @@ class WeComCustomerClient:
         self._retry_backoff = retry_backoff
         self._request_concurrency = request_concurrency
         self._request_semaphore = asyncio.Semaphore(request_concurrency)
+        self._strategy_write_lock = asyncio.Lock()
         base_transport = transport or httpx.AsyncHTTPTransport(proxy=proxy)
         self._http = httpx.AsyncClient(
             base_url=base_url,
@@ -193,7 +203,7 @@ class WeComCustomerClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def get_follow_users(self) -> list[str]:
+    async def get_follow_user_ids(self) -> list[str]:
         """返回已配置客户联系功能的成员用户 ID。"""
 
         response = await self._request(
@@ -201,10 +211,61 @@ class WeComCustomerClient:
         )
         return response.follow_user
 
-    async def iter_customer_details(
+    async def get_customer_ids(self, userid: str) -> list[str]:
+        """获取指定成员添加的客户 ID 列表。"""
+        self._validate_id(userid, "userid")
+        response = await self._request(
+            "GET",
+            "/cgi-bin/externalcontact/list",
+            ExternalContactListResponse,
+            params={"userid": userid},
+        )
+        return response.external_userid
+
+    async def get_customer_detail_page(
+        self, external_userid: str, *, cursor: str = ""
+    ) -> ExternalContactResponse:
+        """获取客户详情的一页跟进人；通过 next_cursor 继续获取后续跟进人。"""
+        self._validate_id(external_userid, "external_userid")
+        params = {"external_userid": external_userid}
+        if cursor:
+            params["cursor"] = cursor
+        return await self._request(
+            "GET", "/cgi-bin/externalcontact/get", ExternalContactResponse, params=params
+        )
+
+    async def iter_customer_detail_pages(
+        self, external_userid: str, *, cursor: str = ""
+    ) -> AsyncIterator[ExternalContactResponse]:
+        """逐页获取单个客户的全部跟进人，保留每页原始响应字段。"""
+        seen = {cursor} if cursor else set()
+        while True:
+            response = await self.get_customer_detail_page(external_userid, cursor=cursor)
+            yield response
+            cursor = self._next_cursor(response.next_cursor, seen)
+            if not cursor:
+                break
+
+    async def get_customer_batch_page(
+        self, userids: Sequence[str], *, cursor: str = "", limit: int = 100
+    ) -> ExternalContactPageResponse:
+        """批量获取客户详情的一页，保留游标和 fail_info 部分失败信息。"""
+        self._validate_ids(userids, "客户成员分组", 100)
+        self._validate_limit(limit, 100)
+        body: dict[str, Any] = {"userid_list": list(userids), "limit": limit}
+        if cursor:
+            body["cursor"] = cursor
+        return await self._request(
+            "POST",
+            "/cgi-bin/externalcontact/batch/get_by_user",
+            ExternalContactPageResponse,
+            json=body,
+        )
+
+    async def iter_customer_batch_pages(
         self, userids: Sequence[str], *, limit: int = 100
-    ) -> AsyncIterator[list[CustomerDetailItem]]:
-        """按页返回一个成员分组所跟进客户的详情。"""
+    ) -> AsyncIterator[ExternalContactPageResponse]:
+        """按页返回完整客户响应，保留游标和部分失败信息供调用方处理。"""
 
         if not 1 <= len(userids) <= 100:
             raise ConfigurationError("客户成员分组大小必须在 1 到 100 之间")
@@ -213,16 +274,8 @@ class WeComCustomerClient:
         cursor = ""
         seen_cursors: set[str] = set()
         while True:
-            body: dict[str, Any] = {"userid_list": list(userids), "limit": limit}
-            if cursor:
-                body["cursor"] = cursor
-            response = await self._request(
-                "POST",
-                "/cgi-bin/externalcontact/batch/get_by_user",
-                CustomerPageResponse,
-                json=body,
-            )
-            yield response.external_contact_list
+            response = await self.get_customer_batch_page(userids, cursor=cursor, limit=limit)
+            yield response
             cursor = response.next_cursor
             if not cursor:
                 break
@@ -263,7 +316,7 @@ class WeComCustomerClient:
                     raise WeComTransportError("企业微信返回了重复的客户群分页游标")
                 seen_cursors.add(cursor)
 
-    async def get_group_chat(self, chat_id: str) -> GroupChatDetail:
+    async def get_group_chat_detail(self, chat_id: str) -> GroupChatDetail:
         """返回指定客户群的详情，其中包含群成员名称。"""
 
         response = await self._request(
@@ -287,10 +340,8 @@ class WeComCustomerClient:
     ) -> None:
         """修改指定成员为客户设置的备注信息。"""
 
-        if not userid.strip():
-            raise ConfigurationError("userid 不能为空")
-        if not external_userid.strip():
-            raise ConfigurationError("external_userid 不能为空")
+        self._validate_id(userid, "userid")
+        self._validate_id(external_userid, "external_userid")
         if all(
             value is None
             for value in (
@@ -308,6 +359,11 @@ class WeComCustomerClient:
             raise ConfigurationError("description 最多包含 150 个字符")
         if remark_company is not None and len(remark_company) > 20:
             raise ConfigurationError("remark_company 最多包含 20 个字符")
+        if remark_mobiles is not None and (
+            isinstance(remark_mobiles, (str, bytes))
+            or any(not isinstance(value, str) for value in remark_mobiles)
+        ):
+            raise ConfigurationError("remark_mobiles 必须为字符串序列")
 
         body: dict[str, Any] = {
             "userid": userid,
@@ -332,6 +388,204 @@ class WeComCustomerClient:
             json=body,
         )
 
+    async def get_customer_strategy_list_page(
+        self, *, cursor: str = "", limit: int = 1000
+    ) -> CustomerStrategyListResponse:
+        """获取规则组 ID 列表的一页。"""
+        self._validate_limit(limit, 1000)
+        body: dict[str, Any] = {"limit": limit}
+        if cursor:
+            body["cursor"] = cursor
+        return await self._request(
+            "POST",
+            "/cgi-bin/externalcontact/customer_strategy/list",
+            CustomerStrategyListResponse,
+            json=body,
+        )
+
+    async def iter_customer_strategy_summaries(
+        self, *, cursor: str = "", limit: int = 1000
+    ) -> AsyncIterator[CustomerStrategySummary]:
+        """遍历应用可管理的规则组 ID。"""
+        seen = {cursor} if cursor else set()
+        while True:
+            response = await self.get_customer_strategy_list_page(cursor=cursor, limit=limit)
+            for item in response.strategy:
+                yield item
+            cursor = self._next_cursor(response.next_cursor, seen)
+            if not cursor:
+                break
+
+    async def get_customer_strategy_detail(self, strategy_id: int) -> CustomerStrategy:
+        """获取规则组详情。"""
+        self._validate_strategy_id(strategy_id)
+        response = await self._request(
+            "POST",
+            "/cgi-bin/externalcontact/customer_strategy/get",
+            CustomerStrategyResponse,
+            json={"strategy_id": strategy_id},
+        )
+        return response.strategy
+
+    async def get_customer_strategy_range_page(
+        self, strategy_id: int, *, cursor: str = "", limit: int = 1000
+    ) -> CustomerStrategyRangeResponse:
+        """获取规则组管理范围的一页成员和部门节点。"""
+        self._validate_strategy_id(strategy_id)
+        self._validate_limit(limit, 1000)
+        body: dict[str, Any] = {"strategy_id": strategy_id, "limit": limit}
+        if cursor:
+            body["cursor"] = cursor
+        return await self._request(
+            "POST",
+            "/cgi-bin/externalcontact/customer_strategy/get_range",
+            CustomerStrategyRangeResponse,
+            json=body,
+        )
+
+    async def iter_customer_strategy_range_nodes(
+        self, strategy_id: int, *, cursor: str = "", limit: int = 1000
+    ) -> AsyncIterator[CustomerStrategyRange]:
+        """遍历规则组管理的所有成员和部门节点。"""
+        seen = {cursor} if cursor else set()
+        while True:
+            response = await self.get_customer_strategy_range_page(
+                strategy_id, cursor=cursor, limit=limit
+            )
+            for item in response.range:
+                yield item
+            cursor = self._next_cursor(response.next_cursor, seen)
+            if not cursor:
+                break
+
+    async def create_customer_strategy(
+        self,
+        strategy_name: str,
+        admin_list: Sequence[str],
+        *,
+        range: Sequence[CustomerStrategyRange],
+        parent_id: int | None = None,
+        privilege: CustomerStrategyPrivilege | None = None,
+    ) -> int:
+        """串行创建规则组；结果不确定时不自动重发，成功返回规则组 ID。"""
+        self._validate_id(strategy_name, "strategy_name")
+        self._validate_ids(admin_list, "admin_list", 20)
+        body: dict[str, Any] = {
+            "strategy_name": strategy_name,
+            "admin_list": list(admin_list),
+            "range": self._serialize_strategy_range(range),
+        }
+        if parent_id is not None:
+            self._validate_strategy_id(parent_id, allow_zero=True)
+            body["parent_id"] = parent_id
+        if privilege is not None:
+            body["privilege"] = privilege.model_dump(exclude_none=True)
+        async with self._strategy_write_lock:
+            response = await self._request(
+                "POST",
+                "/cgi-bin/externalcontact/customer_strategy/create",
+                CustomerStrategyCreateResponse,
+                json=body,
+                retry_safe=False,
+            )
+        return response.strategy_id
+
+    async def update_customer_strategy(
+        self,
+        strategy_id: int,
+        *,
+        strategy_name: str | None = None,
+        admin_list: Sequence[str] | None = None,
+        privilege: CustomerStrategyPrivilege | None = None,
+        range_add: Sequence[CustomerStrategyRange] | None = None,
+        range_del: Sequence[CustomerStrategyRange] | None = None,
+    ) -> None:
+        """串行编辑规则组；管理员及权限按官方覆盖语义发送。"""
+        self._validate_strategy_id(strategy_id)
+        body: dict[str, Any] = {"strategy_id": strategy_id}
+        if strategy_name is not None:
+            self._validate_id(strategy_name, "strategy_name")
+            body["strategy_name"] = strategy_name
+        if admin_list is not None:
+            self._validate_ids(admin_list, "admin_list", 20, allow_empty=True)
+            body["admin_list"] = list(admin_list)
+        if privilege is not None:
+            body["privilege"] = privilege.model_dump(exclude_none=True)
+        if range_add is not None:
+            body["range_add"] = self._serialize_strategy_range(range_add)
+        if range_del is not None:
+            body["range_del"] = self._serialize_strategy_range(range_del)
+        if len(body.get("range_add", [])) + len(body.get("range_del", [])) > 100:
+            raise ConfigurationError("单次最多可配置 100 个管理节点")
+        if len(body) == 1:
+            raise ConfigurationError("至少需要提供一项规则组更新信息")
+        async with self._strategy_write_lock:
+            await self._request(
+                "POST",
+                "/cgi-bin/externalcontact/customer_strategy/edit",
+                ApiResponse,
+                json=body,
+                retry_safe=False,
+            )
+
+    async def delete_customer_strategy(self, strategy_id: int) -> None:
+        """删除规则组，成功时返回 None。"""
+        self._validate_strategy_id(strategy_id)
+        async with self._strategy_write_lock:
+            await self._request(
+                "POST",
+                "/cgi-bin/externalcontact/customer_strategy/del",
+                ApiResponse,
+                json={"strategy_id": strategy_id},
+                retry_safe=False,
+            )
+
+    @staticmethod
+    def _validate_id(value: str, name: str) -> None:
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigurationError(f"{name} 不能为空")
+
+    @classmethod
+    def _validate_ids(
+        cls, values: Sequence[str], name: str, maximum: int, *, allow_empty: bool = False
+    ) -> None:
+        minimum = 0 if allow_empty else 1
+        if isinstance(values, (str, bytes)) or not minimum <= len(values) <= maximum:
+            raise ConfigurationError(f"{name}大小必须在 {minimum} 到 {maximum} 之间")
+        for value in values:
+            cls._validate_id(value, name)
+
+    @staticmethod
+    def _validate_limit(limit: int, maximum: int) -> None:
+        if type(limit) is not int or not 1 <= limit <= maximum:
+            raise ConfigurationError(f"分页大小必须为 1 到 {maximum} 之间的整数")
+
+    @staticmethod
+    def _validate_strategy_id(strategy_id: int, *, allow_zero: bool = False) -> None:
+        if type(strategy_id) is not int or strategy_id < (0 if allow_zero else 1):
+            raise ConfigurationError("规则组 ID 必须为有效整数")
+
+    @classmethod
+    def _serialize_strategy_range(
+        cls, nodes: Sequence[CustomerStrategyRange]
+    ) -> list[dict[str, Any]]:
+        if len(nodes) > 100:
+            raise ConfigurationError("单次最多可配置 100 个管理节点")
+        result = []
+        for node in nodes:
+            if node.type == 1:
+                cls._validate_id(node.userid, "userid")
+            result.append(node.model_dump(exclude_none=True))
+        return result
+
+    @staticmethod
+    def _next_cursor(cursor: str, seen: set[str]) -> str:
+        if cursor:
+            if cursor in seen:
+                raise WeComTransportError("企业微信返回了重复的分页游标")
+            seen.add(cursor)
+        return cursor
+
     async def _request(
         self,
         method: str,
@@ -339,12 +593,18 @@ class WeComCustomerClient:
         response_model: type[_ResponseModel],
         *,
         json: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
+        retry_safe: bool = True,
     ) -> _ResponseModel:
         for attempt in range(self._max_retries + 1):
             try:
                 async with self._request_semaphore:
-                    response = await self._http.request(method, path, json=json)
-                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < self._max_retries:
+                    response = await self._http.request(method, path, json=json, params=params)
+                if (
+                    retry_safe
+                    and response.status_code in _RETRYABLE_STATUS_CODES
+                    and attempt < self._max_retries
+                ):
                     await self._backoff(attempt)
                     continue
                 response.raise_for_status()
@@ -357,12 +617,12 @@ class WeComCustomerClient:
                 self._raise_for_api_error(api_response)
                 return response_model.model_validate(raw_payload)
             except httpx.TransportError:
-                if attempt < self._max_retries:
+                if retry_safe and attempt < self._max_retries:
                     await self._backoff(attempt)
                     continue
                 raise WeComTransportError(f"企业微信请求失败：{path}") from None
             except WeComTransportError:
-                if attempt < self._max_retries:
+                if retry_safe and attempt < self._max_retries:
                     await self._backoff(attempt)
                     continue
                 raise

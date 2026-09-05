@@ -1,17 +1,25 @@
 from .customer_sync import (
     ConfigurationError,
+    ContactUserRecord,
     CustomerContactDirectory,
     CustomerRecord,
     FollowRecord,
+    FollowTagRecord,
+    GroupAdminRecord,
     GroupChatRecord,
     GroupMemberRecord,
     SyncResult,
+    SyncRunRecord,
     WeComApiError,
     WeComArchiveError,
     WeComTransportError,
 )
 
 __all__ = [
+    "ContactUserRecord",
+    "FollowTagRecord",
+    "GroupAdminRecord",
+    "SyncRunRecord",
     "ConfigurationError",
     "CustomerContactDirectory",
     "CustomerRecord",

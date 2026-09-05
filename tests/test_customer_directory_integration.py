@@ -13,10 +13,7 @@ def _required_environment() -> tuple[str, str]:
     corp_id = os.environ.get("WECOM_CORP_ID")
     secret = os.environ.get("WECOM_CUSTOMER_CONTACT_SECRET")
     if not corp_id or not secret:
-        pytest.skip(
-            "企业微信真实集成测试需要配置 WECOM_CORP_ID 和 "
-            "WECOM_CUSTOMER_CONTACT_SECRET"
-        )
+        pytest.skip("企业微信真实集成测试需要配置 WECOM_CORP_ID 和 WECOM_CUSTOMER_CONTACT_SECRET")
     return corp_id, secret
 
 
@@ -76,5 +73,5 @@ async def test_real_customer_client_supports_async_requests() -> None:
         secret=secret,
         proxy=os.environ.get("WECOM_HTTP_PROXY"),
     ) as client:
-        follow_users = await client.get_follow_users()
+        follow_users = await client.get_follow_user_ids()
         assert all(isinstance(userid, str) for userid in follow_users)

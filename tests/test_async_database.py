@@ -4,7 +4,7 @@ import pytest
 
 from wecom_archive.customer_sync.database import normalize_async_database_url, upgrade_database
 from wecom_archive.customer_sync.repository import CustomerDirectoryRepository
-from wecom_archive.customer_sync.schemas import CustomerDetailItem
+from wecom_archive.customer_sync.schemas import ExternalContactDetailItem
 
 
 def test_normalize_async_database_urls() -> None:
@@ -37,7 +37,7 @@ async def test_repository_upserts_customer_items_in_a_batch(tmp_path) -> None:
     await upgrade_database(database_url)
     repository = CustomerDirectoryRepository(database_url)
     items = [
-        CustomerDetailItem.model_validate(
+        ExternalContactDetailItem.model_validate(
             {
                 "external_contact": {"external_userid": "customer-1", "name": "客户"},
                 "follow_info": {"userid": userid, "remark": remark},

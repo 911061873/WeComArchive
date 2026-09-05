@@ -28,7 +28,7 @@ async def test_qps_limit_counts_token_and_business_requests() -> None:
         qps=20,
         transport=httpx.MockTransport(handler),
     ) as client:
-        await client.get_follow_users()
+        await client.get_follow_user_ids()
 
     assert len(request_times) == 2
     assert request_times[1] - request_times[0] >= 0.045
@@ -58,7 +58,7 @@ async def test_client_refreshes_token_and_retries_business_request() -> None:
         transport=httpx.MockTransport(handler),
         retry_backoff=0,
     ) as client:
-        assert await client.get_follow_users() == ["alice"]
+        assert await client.get_follow_user_ids() == ["alice"]
 
     assert token_calls == 2
     assert business_tokens == ["token-1", "token-2"]
@@ -85,7 +85,7 @@ async def test_client_retries_retryable_http_status() -> None:
         transport=httpx.MockTransport(handler),
         retry_backoff=0,
     ) as client:
-        assert await client.get_follow_users() == []
+        assert await client.get_follow_user_ids() == []
 
     assert business_calls == 2
 
@@ -106,7 +106,7 @@ async def test_client_rejects_invalid_response_shape() -> None:
         retry_backoff=0,
     ) as client:
         with pytest.raises(WeComTransportError):
-            await client.get_follow_users()
+            await client.get_follow_user_ids()
 
 
 @pytest.mark.asyncio
@@ -141,9 +141,9 @@ async def test_customer_details_are_yielded_one_page_at_a_time() -> None:
         qps=10_000,
         transport=httpx.MockTransport(handler),
     ) as client:
-        pages = [page async for page in client.iter_customer_details(["alice"])]
+        pages = [page async for page in client.iter_customer_batch_pages(["alice"])]
 
-    assert [page[0].external_contact.external_userid for page in pages] == [
+    assert [page.external_contact_list[0].external_contact.external_userid for page in pages] == [
         "customer-1",
         "customer-2",
     ]
@@ -161,9 +161,12 @@ async def test_customer_details_reject_invalid_user_group_size() -> None:
         transport=httpx.MockTransport(lambda _: httpx.Response(500)),
     ) as client:
         with pytest.raises(ConfigurationError):
-            _ = [page async for page in client.iter_customer_details([])]
+            _ = [page async for page in client.iter_customer_batch_pages([])]
         with pytest.raises(ConfigurationError):
-            _ = [page async for page in client.iter_customer_details([str(i) for i in range(101)])]
+            _ = [
+                page
+                async for page in client.iter_customer_batch_pages([str(i) for i in range(101)])
+            ]
 
 
 @pytest.mark.asyncio

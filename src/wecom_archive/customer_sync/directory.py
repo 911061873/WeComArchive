@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from platformdirs import user_data_path
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, SecretStr, field_validator
@@ -12,7 +13,16 @@ from .database import normalize_async_database_url, upgrade_database
 from .exceptions import WeComArchiveError
 from .repository import CustomerDirectoryRepository
 from .schemas import GroupChatSummary
-from .types import CustomerRecord, GroupChatRecord, SyncResult
+from .types import (
+    ContactUserRecord,
+    CustomerRecord,
+    FollowTagRecord,
+    GroupChatRecord,
+    SyncResult,
+    SyncRunRecord,
+)
+
+_Item = TypeVar("_Item")
 
 
 def _chunks(values: list[str], size: int) -> list[list[str]]:
@@ -131,37 +141,62 @@ class CustomerContactDirectory:
         run_id = await self._repository.start_run("customers")
         seen: set[str] = set()
         write_lock = asyncio.Lock()
+        failure_details: dict[str, Any] | None = None
         try:
-            follow_users = await self._client.get_follow_users()
+            follow_users = await self._client.get_follow_user_ids()
+            await self._repository.upsert_contact_users(run_id, follow_users)
 
             async def sync_chunk(userids: list[str]) -> None:
-                async for items in self._client.iter_customer_details(userids):
+                nonlocal failure_details
+                async for page in self._client.iter_customer_batch_pages(userids):
+                    if page.fail_info and page.fail_info.unlicensed_userid_list:
+                        failure_details = {
+                            "stage": "customer_batch",
+                            "userid_list": userids,
+                            "fail_info": page.fail_info.model_dump(mode="json"),
+                        }
+                        raise WeComArchiveError(
+                            "部分成员无有效互通许可，客户同步结果不完整，已终止本轮同步"
+                        )
+                    items = page.external_contact_list
                     if not items:
                         continue
                     async with write_lock:
                         seen.update(await self._repository.upsert_customer_items(run_id, items))
 
-            semaphore = asyncio.Semaphore(self._request_concurrency)
+            await self._run_limited(_chunks(follow_users, 100), sync_chunk)
 
-            async def run_chunk(userids: list[str]) -> None:
-                async with semaphore:
-                    await sync_chunk(userids)
+            async def sync_detail(external_userid: str) -> None:
+                async for page in self._client.iter_customer_detail_pages(external_userid):
+                    if page.external_contact.external_userid != external_userid:
+                        raise WeComArchiveError("客户详情响应 ID 与请求不一致，已终止本轮同步")
+                    async with write_lock:
+                        await self._repository.upsert_customer_detail_page(run_id, page)
 
-            tasks = [
-                asyncio.create_task(run_chunk(userids)) for userids in _chunks(follow_users, 100)
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            except BaseException:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
+            await self._run_limited(sorted(seen), sync_detail)
 
             return await self._repository.finalize_customers(run_id, len(seen))
-        except Exception as exc:
-            await self._record_failed_run(run_id, exc)
+        except (Exception, asyncio.CancelledError) as exc:
+            await self._record_failed_run(run_id, exc, failure_details=failure_details)
+            raise
+
+    async def _run_limited(
+        self, values: Iterable[_Item], operation: Callable[[_Item], Awaitable[None]]
+    ) -> None:
+        """固定数量工作协程；任一失败后取消并等待其余协程。"""
+        pending = iter(values)
+
+        async def worker() -> None:
+            for value in pending:
+                await operation(value)
+
+        tasks = [asyncio.create_task(worker()) for _ in range(self._request_concurrency)]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
     async def sync_group_chats_once(self) -> SyncResult:
@@ -169,12 +204,12 @@ class CustomerContactDirectory:
         run_id = await self._repository.start_run("group_chats")
         seen: set[str] = set()
         try:
-            follow_users = await self._client.get_follow_users()
+            follow_users = await self._client.get_follow_user_ids()
             summaries: dict[str, GroupChatSummary] = {}
             async for summary in self._client.iter_group_chat_summaries(follow_users):
                 summaries[summary.chat_id] = summary
             for chat_id, summary in summaries.items():
-                detail = await self._client.get_group_chat(chat_id)
+                detail = await self._client.get_group_chat_detail(chat_id)
                 seen.add(await self._repository.upsert_group_chat(run_id, summary, detail))
             return await self._repository.finalize_group_chats(run_id, len(seen))
         except Exception as exc:
@@ -188,6 +223,30 @@ class CustomerContactDirectory:
     async def get_group_chat(self, chat_id: str) -> GroupChatRecord | None:
         await self._ensure_initialized()
         return await self._repository.get_group_chat(chat_id)
+
+    async def list_contact_users(
+        self, *, active_only: bool = True, offset: int = 0, limit: int = 100
+    ) -> tuple[ContactUserRecord, ...]:
+        """分页查询本地客户联系成员。"""
+        await self._ensure_initialized()
+        return await self._repository.list_contact_users(
+            active_only=active_only, offset=offset, limit=limit
+        )
+
+    async def get_contact_user(self, userid: str) -> ContactUserRecord | None:
+        await self._ensure_initialized()
+        return await self._repository.get_contact_user(userid)
+
+    async def get_customer_follow_tags(
+        self, external_userid: str, userid: str
+    ) -> tuple[FollowTagRecord, ...]:
+        """查询指定客户与跟进成员最后保存的完整标签集合。"""
+        await self._ensure_initialized()
+        return await self._repository.get_customer_follow_tags(external_userid, userid)
+
+    async def get_sync_run(self, run_id: str) -> SyncRunRecord | None:
+        await self._ensure_initialized()
+        return await self._repository.get_sync_run(run_id)
 
     async def _ensure_initialized(self) -> None:
         if self._closed:
@@ -214,13 +273,21 @@ class CustomerContactDirectory:
         return f"sqlite+aiosqlite:///{database_path.as_posix()}"
 
     @staticmethod
-    def _safe_error_summary(exc: Exception) -> str:
+    def _safe_error_summary(exc: BaseException) -> str:
         if isinstance(exc, WeComArchiveError):
             return f"{type(exc).__name__}: {exc}"
         return type(exc).__name__
 
-    async def _record_failed_run(self, run_id: str, exc: Exception) -> None:
+    async def _record_failed_run(
+        self,
+        run_id: str,
+        exc: BaseException,
+        *,
+        failure_details: dict[str, Any] | None = None,
+    ) -> None:
         try:
-            await self._repository.fail_run(run_id, self._safe_error_summary(exc))
+            await self._repository.fail_run(
+                run_id, self._safe_error_summary(exc), failure_details=failure_details
+            )
         except Exception:
             pass

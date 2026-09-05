@@ -20,6 +20,8 @@
 
 - [项目计划](docs/PLAN.md)
 - [系统架构](docs/ARCHITECTURE.md)
+- [客户联系数据库结构](docs/DATABASE_SCHEMA.md)
+- [客户管理 Client 接口清单与用法](docs/CUSTOMER_CLIENT.md)
 - [决策记录](docs/DECISIONS.md)
 - [项目记忆](docs/MEMORY.md)
 
@@ -59,9 +61,23 @@ asyncio.run(main())
 
 未传入 `database_url` 时会在操作系统用户数据目录中创建 SQLite 数据库。也可以显式传入 SQLAlchemy 数据库 URL，组件会为 SQLite、MySQL 和 PostgreSQL 选择异步驱动；MySQL 和 PostgreSQL 分别需要安装 `mysql`、`postgresql` 可选依赖。可通过 `proxy` 为客户联系 REST API 配置 HTTP 代理，通过 `qps` 调整单个客户端实例的平滑请求速率上限，默认值为 `50`；通过 `request_concurrency` 限制同时在途的请求数，默认值为 `8`。客户同步会并发处理不同的成员分组，同一分组内仍按游标顺序翻页，并将客户及跟进关系按批次写入数据库。token 获取、业务请求和重试都会计入 QPS。Secret、仅保存在进程内存中的访问令牌及带认证信息的代理地址不得写入日志。
 
+### 本地资料查询
+
+客户同步会保存成员列表、批量客户信息，并继续拉取每个客户的全部详情页及标签。详情阶段会增加请求数量，同样受 `qps` 和 `request_concurrency` 限制。只有全部阶段成功，才对未见记录进行软失活。
+
+```python
+members = await directory.list_contact_users(limit=100, offset=0)
+member = await directory.get_contact_user("zhangsan")
+customer = await directory.get_customer("external-user-id")
+tags = await directory.get_customer_follow_tags("external-user-id", "zhangsan")
+run = await directory.get_sync_run(customer_result.run_id)
+```
+
+以上接口只查本地数据库。成员列表默认仅返回活跃成员，可用 `active_only=False` 查询全部已保存成员；每页最多 1000 项。客户跟进关系的 `tag_details` 包含个人标签，`tags` 为其中有 ID 的标签集合。`get_sync_run()` 返回运行状态及 `failure_details`，便于排查部分失败。完整字段及有效性规则见 [数据库结构](docs/DATABASE_SCHEMA.md)。
+
 ### 真实接口测试
 
-测试套件不模拟企业微信响应。运行前在当前 PowerShell 会话中设置非生产企业的凭据：
+测试套件包含离线协议测试及真实接口集成测试。运行真实接口测试前，在当前 PowerShell 会话中设置非生产企业的凭据：
 
 ```powershell
 $env:WECOM_CORP_ID = "非生产企业ID"

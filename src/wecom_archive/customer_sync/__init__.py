@@ -8,14 +8,22 @@ from .exceptions import (
     WeComTransportError,
 )
 from .types import (
+    ContactUserRecord,
     CustomerRecord,
     FollowRecord,
+    FollowTagRecord,
+    GroupAdminRecord,
     GroupChatRecord,
     GroupMemberRecord,
     SyncResult,
+    SyncRunRecord,
 )
 
 __all__ = [
+    "ContactUserRecord",
+    "FollowTagRecord",
+    "GroupAdminRecord",
+    "SyncRunRecord",
     "ConfigurationError",
     "CustomerContactDirectory",
     "CustomerRecord",
