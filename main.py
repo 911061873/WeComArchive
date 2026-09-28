@@ -22,11 +22,13 @@ async def main():
     if not archive_secret or not archive_secret.strip():
         raise ValueError("请设置非空的环境变量 WECOM_ARCHIVE_SECRET")
     proxy = os.getenv("WECOM_PROXY") or ""
+    database_url = os.getenv("WECOM_DATABASE_URL") or "sqlite:///./wecom_archive.db"
     service = MessageArchiveService(
         ArchiveConfig(
             corp_id=corp_id,
             archive_secret=archive_secret,
             proxy=proxy,
+            database_url=database_url,
         )
     )
     service.set_private_key(Path("private_key.pem").read_bytes(), version=1)
