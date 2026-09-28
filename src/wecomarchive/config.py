@@ -6,7 +6,7 @@ class ArchiveConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     corp_id: str = Field(min_length=1)
-    archive_secret: SecretStr
+    archive_secret: SecretStr | str
     database_url: str = "sqlite:///./wecom_archive.db"
     poll_interval: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     batch_size: int = Field(default=1000, ge=1, le=1000, strict=True)
@@ -26,7 +26,9 @@ class ArchiveConfig(BaseModel):
 
     @field_validator("archive_secret")
     @classmethod
-    def secret_not_blank(cls, value: SecretStr) -> SecretStr:
+    def secret_not_blank(cls, value: SecretStr | str) -> SecretStr:
+        if isinstance(value, str):
+            value = SecretStr(value)
         if not value.get_secret_value().strip():
             raise ValueError("不能为空")
         return value
