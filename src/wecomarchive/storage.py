@@ -35,7 +35,7 @@ def prepare(chat: EncryptedChat, data: dict) -> PreparedMessage:
         result.type_fields = parse_type(msgtype, data)
     except (ValueError, TypeError) as exc:
         result.parse_error = str(exc)
-        log.warning("类型解析失败 msgid=%s type=%s", chat.msgid, msgtype)
+        log.error("类型解析失败 msgid=%s type=%s", chat.msgid, msgtype)
     return result
 
 

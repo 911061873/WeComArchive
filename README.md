@@ -137,3 +137,12 @@ uv build
 覆盖 Python 3.10/3.12、SQLite、MySQL 8.4 和 PostgreSQL 17。
 SDK 测试使用替身与真实 RSA 运算，不会请求企业微信或发送影刀消息。
 本次三种数据库的实际运行结果见 [验证记录](doc/验证记录.md)。
+
+## 日志持久化
+
+创建 `MessageArchiveService` 时自动在当前用户家目录的 `wecomarchive` 文件夹中配置 UTF-8 文件日志：
+
+- `wecomarchive.log`：INFO、WARNING 日志，每个文件 10 MiB，保留 5 个轮转备份。
+- `error.log`：ERROR、CRITICAL 日志，持续追加，不限制大小、不自动清理；包含采集、存储、解密、类型解析和消费失败。
+
+同时保存 `pyweworkfinance` 的 WARNING 及以上日志。重复创建服务不会重复添加文件处理器，调用方已有的控制台日志配置继续生效。

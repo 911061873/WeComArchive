@@ -1,10 +1,29 @@
+import logging
 import os
+from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect, text
 
 from wecomarchive.db import Base, Database
+from wecomarchive.logging_setup import _ArchiveErrorFileHandler, _ArchiveRotatingFileHandler
 from wecomarchive.models import EncryptedChat
+
+
+@pytest.fixture(autouse=True)
+def isolated_log_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    loggers = [logging.getLogger(name) for name in ("wecomarchive", "pyweworkfinance")]
+    levels = [logger.level for logger in loggers]
+    yield
+    for logger, level in zip(loggers, levels):
+        for handler in logger.handlers[:]:
+            if isinstance(handler, (_ArchiveRotatingFileHandler, _ArchiveErrorFileHandler)):
+                logger.removeHandler(handler)
+                handler.close()
+        logger.setLevel(level)
 
 
 @pytest.fixture(scope="session")

@@ -13,6 +13,7 @@ from threading import current_thread, main_thread
 from .config import ArchiveConfig
 from .consumer import MessageConsumer
 from .db import Database
+from .logging_setup import configure_logging
 from .models import ConsumerMessage
 from .rules import TextRule
 from .sdk import ArchiveClient, FinanceClient
@@ -26,6 +27,7 @@ class MessageArchiveService:
     """一个实例运行一次；一个数据库只运行一个采集实例。"""
 
     def __init__(self, config: ArchiveConfig, *, client: ArchiveClient | None = None):
+        configure_logging()
         self.config = config
         self._client = client if client is not None else FinanceClient(config)
         self._db = Database(config.database_url)
@@ -84,7 +86,7 @@ class MessageArchiveService:
             except Exception as exc:
                 # 不记录正文或 SDK 异常文本，避免意外将密钥/明文写入日志。
                 error = type(exc).__name__
-                log.warning("解密失败 msgid=%s error=%s", chat.msgid, error)
+                log.error("解密失败 msgid=%s error=%s", chat.msgid, error)
                 results.append(PreparedMessage(chat, decrypt_error=error))
         return self._store.save_batch(results, max(cursor, max(chat.seq for chat in chats)))
 
