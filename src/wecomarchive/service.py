@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import signal
 import time
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from threading import current_thread, main_thread
 
 from .config import ArchiveConfig
 from .consumer import MessageConsumer
@@ -136,8 +139,35 @@ class MessageArchiveService:
         await producer
         await self._queue.join()
 
-    async def run(self) -> None:
-        """异步运行至 stop() 或取消；限时排空队列，不恢复持久化消费任务。"""
+    @contextmanager
+    def _handle_signals(self, enabled: bool):
+        # signal.signal 只允许主线程使用，也兼容 Windows 的事件循环。
+        if not enabled or current_thread() is not main_thread():
+            yield
+            return
+        previous = {}
+        requested = False
+
+        def request_stop(_signum, _frame):
+            nonlocal requested
+            if not requested:
+                requested = True
+                self.stop()
+
+        try:
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                previous[signum] = signal.signal(signum, request_stop)
+            yield
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+
+    async def run(self, *, handle_signals: bool = True) -> None:
+        """运行至 stop()/Ctrl+C；嵌入其他应用时可关闭进程信号接管。"""
+        with self._handle_signals(handle_signals):
+            await self._run()
+
+    async def _run(self) -> None:
         if self._started:
             raise RuntimeError("服务实例不能重复运行")
         self._started = True

@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import os
-import signal
 from pathlib import Path
 
 from wecomarchive import ArchiveConfig, ConsumerMessage, MessageArchiveService, TextRule
@@ -28,17 +27,13 @@ async def main():
     consumer = PrintConsumer()
     service.add_rule(TextRule(contains="订单"), consumer)
     service.add_rule(TextRule(regex=r"工单\s*\d+"), consumer)
-    # Windows 不支持 loop.add_signal_handler，使用 Python 主线程信号处理器。
-    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
-    try:
-        for signum in previous:
-            signal.signal(signum, lambda *_: service.stop())
-        await service.run()
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+    await service.run()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # 服务启动前（如读取配置/私钥时）的 Ctrl+C 也不输出堆栈。
+        pass
