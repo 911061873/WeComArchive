@@ -21,15 +21,12 @@ examples = ["httpx>=0.27,<1"]
 wecomarchive-db = "wecomarchive.cli:main"
 
 [dependency-groups]
-dev = [
-    "pytest>=8,<10",
-    "build>=1.2",
-    "ruff>=0.12,<1",
-]
+dev = ["pytest>=8,<10", "build>=1.2", "ruff>=0.12,<1", "nuitka>=4.2.2"]
+
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=42", "wheel", "Nuitka[build-wheel]", "toml"]
+build-backend = "nuitka.distutils.Build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wecomarchive"]
@@ -45,3 +42,16 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.nuitka]
+nofollow-import-to = ["*.tests", "*.test"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.package-data]
+wecomarchive = [
+    "migrations/env.py",
+    "migrations/script.py.mako",
+    "migrations/versions/*.py",
+]
