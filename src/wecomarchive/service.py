@@ -36,7 +36,7 @@ class MessageArchiveService:
         )
         self._stop = asyncio.Event()
         self._started = False
-        self._loop = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._executor = None
         self._inflight = None
         self._closing = False
@@ -89,6 +89,8 @@ class MessageArchiveService:
         return self._store.save_batch(results, max(cursor, max(chat.seq for chat in chats)))
 
     async def _blocking(self, callback):
+        if self._loop is None:
+            raise RuntimeError("服务尚未绑定事件循环")
         self._inflight = self._loop.run_in_executor(self._executor, callback)
         # asyncio 取消不能中断原生 SDK；保留 future，在释放资源前等调用结束。
         return await asyncio.shield(self._inflight)
