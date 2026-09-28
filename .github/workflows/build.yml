@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   PYTHONUTF8: '1'
@@ -54,3 +54,21 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
           retention-days: 14
+  release:
+    name: 发布 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 下载所有 wheel
+        uses: actions/download-artifact@v5
+        with:
+          pattern: wecomarchive-*
+          path: dist
+          merge-multiple: true
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
