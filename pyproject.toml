@@ -44,7 +44,7 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I", "UP"]
 
 [tool.nuitka]
-nofollow-import-to = ["*.tests", "*.test"]
+nofollow-import-to = ["*.tests", "*.test", "wecomarchive.migrations"]
 
 [tool.setuptools]
 include-package-data = false
