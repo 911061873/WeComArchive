@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Test artifacts
+.pytest_tmp/
+
+# Local environment / data
+.env
+*.db
+*.db-wal
+*.db-shm
+*.lock
+
+# Local dependency cache
+.uv-cache/
+
+# Local credentials, archived content and verification environments
+*.pem
+attachments/
+data.json
+.pytest_cache/
+.test-tools/
+.wheel-test/

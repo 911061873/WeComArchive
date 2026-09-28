@@ -1,0 +1,54 @@
+name: tests
+on: [push, pull_request]
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+        database: [sqlite, mysql, postgres]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test-password
+          MYSQL_DATABASE: archive_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -ptest-password"
+          --health-interval=10s --health-timeout=5s --health-retries=15
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: archive_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s --health-timeout=5s --health-retries=15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install '.[mysql,postgres,examples]' pytest build ruff
+      - name: Select test database
+        shell: bash
+        run: |
+          if [ '${{ matrix.database }}' = mysql ]; then
+            echo 'WECOM_TEST_DATABASE_URL=mysql+pymysql://root:test-password@127.0.0.1:3306/archive_test?charset=utf8mb4' >> "$GITHUB_ENV"
+          elif [ '${{ matrix.database }}' = postgres ]; then
+            echo 'WECOM_TEST_DATABASE_URL=postgresql+psycopg://postgres:test-password@127.0.0.1:5432/archive_test' >> "$GITHUB_ENV"
+          fi
+      - run: python -m pytest
+      - run: ruff check src tests examples main.py
+      - run: ruff format --check src tests examples main.py
+      - run: python -m build
+      - name: Installed wheel smoke test
+        shell: bash
+        run: |
+          python -m venv /tmp/archive-wheel-test
+          /tmp/archive-wheel-test/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/archive-wheel-test/bin/python -m wecomarchive.cli upgrade --database-url sqlite:///wheel-test.db
