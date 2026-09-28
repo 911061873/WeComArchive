@@ -15,12 +15,13 @@ async def test(message: ConsumerMessage):
 
 
 async def main():
-    corp_id = os.getenv('WECOM_CORP_ID')
-    assert corp_id
-    archive_secret = os.getenv('WECOM_ARCHIVE_SECRET')
-    assert archive_secret
-    proxy = os.getenv('WECOM_PROXY')
-    assert proxy
+    corp_id = os.getenv("WECOM_CORP_ID")
+    if not corp_id or not corp_id.strip():
+        raise ValueError("请设置非空的环境变量 WECOM_CORP_ID")
+    archive_secret = os.getenv("WECOM_ARCHIVE_SECRET")
+    if not archive_secret or not archive_secret.strip():
+        raise ValueError("请设置非空的环境变量 WECOM_ARCHIVE_SECRET")
+    proxy = os.getenv("WECOM_PROXY") or ""
     service = MessageArchiveService(
         ArchiveConfig(
             corp_id=corp_id,
