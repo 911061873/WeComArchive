@@ -9,7 +9,7 @@ from sqlalchemy import inspect
 
 def configuration(connection=None):
     config = Config()
-    config.set_main_option("script_location", str(Path(__file__).parent))
+    config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
     config.attributes["connection"] = connection
     return config
 

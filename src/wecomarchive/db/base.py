@@ -27,7 +27,7 @@ class Database:
 
     def initialize(self):
         """空库自动安装；已有库只检查版本，绝不隐式升级。"""
-        from ..migrations import current_revision, head_revision, upgrade
+        from ..migration import current_revision, head_revision, upgrade
 
         tables = set(inspect(self.engine).get_table_names())
         if not tables:

@@ -3,7 +3,7 @@ from alembic import command
 from sqlalchemy import inspect, text
 
 from wecomarchive.db import Base, Database
-from wecomarchive.migrations import configuration, current_revision, upgrade
+from wecomarchive.migration import configuration, current_revision, upgrade
 
 
 def test_empty_database_explicit_upgrade_and_downgrade(tmp_path):
