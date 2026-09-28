@@ -2,7 +2,7 @@ import argparse
 import os
 
 from .db import Database
-from .migrations import current_revision, upgrade
+from .migration import current_revision, upgrade
 
 
 def main():

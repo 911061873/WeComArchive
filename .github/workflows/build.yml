@@ -1,0 +1,56 @@
+name: build-wheels
+
+on:
+  push:
+    branches: [main, dev, dev-github-actions]
+    tags: ['v*']
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-wheels-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04]
+        python: ['3.10']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: x64
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: 安装构建工具
+        run: python -m pip install --upgrade pip build
+      - name: 编译 Nuitka wheel
+        run: python -m build --wheel
+      - name: 安装并验证编译产物
+        run: |
+          python -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          python "$GITHUB_WORKSPACE/scripts/verify_wheel.py"
+          wecomarchive-db upgrade --database-url sqlite:///wheel-cli.db
+          wecomarchive-db current --database-url sqlite:///wheel-cli.db
+      - name: 上传 wheel 安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: wecomarchive-${{ matrix.os }}-cp${{ matrix.python }}-x64
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 14

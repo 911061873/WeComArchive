@@ -125,6 +125,22 @@ postgresql+psycopg://user:password@127.0.0.1:5432/archive
 
 ## 开发与验证
 
+### GitHub Actions 自动编译
+
+[build-wheels 工作流](.github/workflows/build.yml) 在推送到 `main`、`dev`、
+`dev-github-actions`，推送 `v*` 标签，或向 `main`、`dev` 提交 PR 时自动运行，
+也支持在 Actions 页面手动触发（工作流合并到默认分支后可用）。
+
+使用现有 Nuitka 构建后端，分别生成 Windows x64、Linux x64 的 Python 3.10、3.12
+编译 wheel，共四个产物。每个任务安装 wheel，在源码目录外检查编译模块和数据库迁移，
+通过后上传到该次运行页面的 **Artifacts**，保留 14 天，不自动发布到 PyPI 或 GitHub Release。
+下载并解压对应平台和 Python 版本的产物后，运行 `python -m pip install <文件名>.whl`。
+
+Linux 产物基于 Ubuntu 22.04 构建，未经过 manylinux 修复，不承诺兼容所有 Linux 发行版。
+wheel 不包含第三方依赖及企业微信原生 SDK，安装时仍需满足依赖和 SDK 的运行要求。
+
+### 本地验证
+
 ```shell
 uv sync --all-extras
 uv run pytest
