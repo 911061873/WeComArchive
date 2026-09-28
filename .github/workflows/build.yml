@@ -2,11 +2,7 @@ name: build-wheels
 
 on:
   push:
-    branches: [main, dev, dev-github-actions]
-    tags: ['v*']
-  pull_request:
-    branches: [main, dev]
-  workflow_dispatch:
+    branches: [main]
 
 permissions:
   contents: read
