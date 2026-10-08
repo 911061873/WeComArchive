@@ -1,0 +1,105 @@
+name: build-wheels
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+
+concurrency:
+  group: build-wheels-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04]
+        python: ['3.10']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: x64
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: 安装构建工具
+        run: python -m pip install --upgrade pip build
+      - name: 编译 Nuitka wheel
+        run: python -m build --wheel
+      - name: 修复 Linux wheel 平台标签
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install auditwheel patchelf
+          if ! auditwheel repair --plat manylinux_2_35_x86_64 dist/*.whl --wheel-dir repaired > repair.log 2>&1; then
+            cat repair.log
+            while IFS= read -r line; do echo "::error::$line"; done < <(tail -n 15 repair.log)
+            exit 1
+          fi
+          rm dist/*.whl
+          mv repaired/*.whl dist/
+      - name: 安装并验证编译产物
+        run: |
+          python -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          python "$GITHUB_WORKSPACE/scripts/verify_wheel.py"
+          wecomarchive-db upgrade --database-url sqlite:///wheel-cli.db
+          wecomarchive-db current --database-url sqlite:///wheel-cli.db
+      - name: 上传 wheel 安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: wecomarchive-${{ matrix.os }}-cp${{ matrix.python }}-x64
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
+  release:
+    name: 发布 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 下载所有 wheel
+        uses: actions/download-artifact@v5
+        with:
+          pattern: wecomarchive-*
+          path: dist
+          merge-multiple: true
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+  pypi:
+    name: 发布 PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: 下载所有 wheel
+        uses: actions/download-artifact@v5
+        with:
+          pattern: wecomarchive-*
+          path: dist
+          merge-multiple: true
+      - name: 发布到 PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
