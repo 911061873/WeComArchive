@@ -112,6 +112,24 @@ python -m build --wheel
 
 自动构建保留现有 Nuitka wheel 工作流；迁移脚本随包分发，`scripts/verify_wheel.py` 验证编译模块和迁移。
 
+## 编译包的类型提示
+
+类型信息通过包内的 `.pyi` 和空的 `py.typed` 文件分发，IDE 读取存根，运行时加载 Nuitka 编译模块。
+修改公开接口后，在安装开发依赖的环境中，从源码重新生成存根，再构建 wheel：
+
+```shell
+stubgen --no-import --include-docstrings src/wecomarchive -o src
+python -m build --wheel
+```
+
+生成后核对顶层导出、函数签名及 `Any` / `Incomplete` 类型；存根应随源码一起提交。
+自动生成的存根是初稿，Pydantic 模型等动态接口需要人工核对。
+命令会覆盖现有存根，手工补充的类型需要在重新生成后保留。
+`pyproject.toml` 的 `package-data` 显式包含根目录、`db` 和 `services` 的存根；新增子包时也要更新此列表。
+禁用 Nuitka 自带的入口 `.pyi` 生成，统一使用这套完整的包内存根。
+发布前检查 wheel 内包含 `wecomarchive/py.typed`、`wecomarchive/__init__.pyi` 以及各子模块存根，
+并在源码目录外安装 wheel，验证 IDE 补全和类型检查。
+
 ## 日志
 
 构造主服务时在用户家目录 `wecomarchive` 中配置 UTF-8 文件日志。

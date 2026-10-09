@@ -20,6 +20,10 @@ def main():
     package_path = Path(wecomarchive.__file__).resolve()
     if not hasattr(wecomarchive, "__compiled__"):
         raise RuntimeError(f"导入的不是编译扩展模块：{package_path}")
+    typing_path = Path(wecomarchive.__path__[0])
+    for name in ("py.typed", "__init__.pyi", "main.pyi", "config.pyi", "models.pyi"):
+        if not (typing_path / name).is_file():
+            raise RuntimeError(f"wheel 缺少类型声明文件：{name}")
     with TemporaryDirectory(prefix="wecomarchive-wheel-") as directory:
         database_path = Path(directory) / "archive.db"
         db = Database(f"sqlite:///{database_path.as_posix()}")
@@ -63,7 +67,7 @@ def main():
                 raise RuntimeError("编译包流水线或消费者持久化验证失败")
         finally:
             db.dispose()
-    print("编译模块、数据库迁移及第二版流水线验证通过")
+    print("编译模块、类型声明文件、数据库迁移及第二版流水线验证通过")
 
 
 if __name__ == "__main__":
