@@ -41,7 +41,7 @@ class Database:
             upgrade(self.engine)
         elif current_revision(self.engine) != head_revision():
             raise RuntimeError(
-                "数据库未初始化或版本不匹配；请使用新空库，或调用 wecomarchive.migration.upgrade(engine) 升级"
+                "数据库未初始化或版本不匹配；旧版数据库请备份后另建空库"
             )
 
     def dispose(self) -> None:

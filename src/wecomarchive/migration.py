@@ -28,5 +28,7 @@ def upgrade(engine: Engine) -> None:
     tables = set(inspect(engine).get_table_names())
     if tables - {"alembic_version"} and current_revision(engine) is None:
         raise RuntimeError("拒绝升级未受版本管理的已有数据库；开发阶段旧库请备份后另建空库")
+    if current_revision(engine) in {"0001", "0002"}:
+        raise RuntimeError("旧版数据库迁移已废弃；请备份后另建空库，不支持迁移旧版数据")
     with engine.begin() as connection:
         command.upgrade(configuration(connection), "head")
