@@ -1,8 +1,7 @@
-import asyncio
 import os
 from pathlib import Path
 
-from wecomarchive import ArchiveConfig, ConsumerMessage, MessageArchiveService, TextRule
+from wecomarchive import ConsumerMessage, WeComArchive
 
 
 async def consume(message: ConsumerMessage):
@@ -14,7 +13,7 @@ async def test(message: ConsumerMessage):
     print(message.msgid, message.text)
 
 
-async def main():
+def main():
     corp_id = os.getenv("WECOM_CORP_ID")
     if not corp_id or not corp_id.strip():
         raise ValueError("请设置非空的环境变量 WECOM_CORP_ID")
@@ -23,23 +22,18 @@ async def main():
         raise ValueError("请设置非空的环境变量 WECOM_ARCHIVE_SECRET")
     proxy = os.getenv("WECOM_PROXY") or ""
     database_url = os.getenv("WECOM_DATABASE_URL") or "sqlite:///./wecom_archive.db"
-    service = MessageArchiveService(
-        ArchiveConfig(
-            corp_id=corp_id,
-            archive_secret=archive_secret,
-            proxy=proxy,
-            database_url=database_url,
-        )
+    service = WeComArchive(
+        corp_id=corp_id, archive_secret=archive_secret, proxy=proxy, database_url=database_url
     )
     service.set_private_key(Path("private_key.pem").read_bytes(), version=1)
-    service.add_rule(TextRule(contains="订单"), consume)
-    service.add_rule(TextRule(regex=r"工单\s*\d+"), consume)
-    service.add_rule(TextRule(regex=".*"), test)
-    await service.run()
+    service.add_consumer("本地规则消费者1", "订单", False, consume)
+    service.add_consumer("本地规则消费者2", "工单\\s*\\d+", True, consume)
+    service.add_consumer("本地规则消费者3", ".*", True, test)
+    service.start()
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         pass

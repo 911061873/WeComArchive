@@ -1,7 +1,7 @@
 [project]
 name = "wecomarchive"
-version = "0.1.0"
-description = "企业微信会话存档、事务游标与异步规则消费框架"
+version = "0.2.0"
+description = "企业微信会话存档、持久化流水线与多消费者框架"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,9 +16,6 @@ dependencies = [
 mysql = ["pymysql[rsa]>=1.1,<2"]
 postgres = ["psycopg[binary]>=3.1,<4"]
 examples = ["httpx>=0.27,<1"]
-
-[project.scripts]
-wecomarchive-db = "wecomarchive.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "build>=1.2", "ruff>=0.12,<1", "nuitka>=4.2.2"]

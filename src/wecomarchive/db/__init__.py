@@ -1,4 +1,12 @@
 from .base import Database
-from .models import TYPE_MODELS, Base, DecryptedMessage, EncryptedMessage, Progress
+from .models import Base, ConsumerTask, DecryptedMessage, EncryptedMessage, ParsedMessage, Progress
 
-__all__ = ["Database", "Base", "DecryptedMessage", "EncryptedMessage", "Progress", "TYPE_MODELS"]
+__all__ = [
+    "Database",
+    "Base",
+    "ConsumerTask",
+    "DecryptedMessage",
+    "EncryptedMessage",
+    "ParsedMessage",
+    "Progress",
+]

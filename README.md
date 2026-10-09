@@ -1,173 +1,120 @@
 # WeComArchive
 
-Python 3.10+ 企业微信会话存档框架：轮询拉取、解密、数据库存档，以及基于文本规则的异步消费。
-单企业、单进程采集；开发者在自己的 Python 项目中配置和运行。
+Python 3.10+ 企业微信会话存档框架。第二版以 [第二版规划](doc/第二版规划.md) 为准：
+拉取加密消息 → 解密保存原始明文 → 解析文本消息 → 多消费者执行业务。
 
-## 安装与运行
+## 使用
 
-本仓库安装（尚未承诺已发布到 PyPI）：
+当前源码采用第二版 API，与已发布的第一版 API 不兼容。安装源码及所需数据库驱动：
 
 ```shell
 python -m pip install .
-# 按数据库选择驱动
-python -m pip install '.[mysql]'
-python -m pip install '.[postgres]'
+python -m pip install ".[mysql]"
+python -m pip install ".[postgres]"
 ```
 
-使用 `pyweworkfinance`，需配置企业微信会话存档、访问权限与对应 RSA 私钥，
-并满足 SDK 的本机运行要求。框架不会下载附件。
+实际运行需配置企业微信会话内容存档、对应 RSA 私钥，以及 pyweworkfinance 原生 SDK 的运行环境。
 
 ```python
-import asyncio
 from pathlib import Path
-from wecomarchive import ArchiveConfig, ConsumerMessage, MessageArchiveService, TextRule
+from wecomarchive import WeComArchive, ServiceConfig, ConsumerMessage
 
 async def consume(message: ConsumerMessage):
-    print(message.msgid, message.text, message.data)
+    if "订单" in message.text:
+        print(message.msgid, message.text)
 
-async def main():
-    service = MessageArchiveService(ArchiveConfig(
-        corp_id="你的企业 ID",
-        archive_secret="你的会话存档 Secret",
-    ))
-    service.set_private_key(Path("private_key.pem").read_bytes(), version=1)
-    service.add_rule(TextRule(contains="订单"), consume)
-    service.add_rule(TextRule(regex=r"工单\s*\d+"), consume)
-    await service.run()
-
-asyncio.run(main())
+with WeComArchive(
+    corp_id="你的企业 ID",
+    archive_secret="你的会话存档 Secret",
+    decrypt=ServiceConfig(threads=2, poll_interval=1),
+    parse=ServiceConfig(threads=2, poll_interval=1),
+    consume=ServiceConfig(threads=4, poll_interval=1),
+) as archive:
+    archive.set_private_key(Path("private_key.pem").read_bytes(), version=1)
+    archive.add_consumer("订单处理", "订单", False, consume)
+    archive.start()
 ```
 
-直接传入同步 `def consume(message)` 或异步 `async def consume(message)` 函数。
-同步消费者在线程池中执行，不阻塞事件循环；工作任务数设为 1 时仍串行消费。关闭超时无法中断已开始执行的同步函数，
-该函数可能继续产生业务副作用，且 `asyncio.run()` 会等待默认线程池退出；同步 I/O 应自行设置超时。
-每条规则只能设置 `contains` 或 `regex` 之一，
-只匹配 `text.content`。同一消息命中两条规则就调用两次，即使消费者相同。
-每次调用收到独立的 Pydantic `ConsumerMessage` 深拷贝：`msgid`、`seq`、`msgtype`、毫秒时间戳 `msgtime`、完整明文 `data`，以及便捷属性 `text`。
+构造函数完成参数校验、数据库初始化、独占锁、SDK 初始化及四个子服务创建；失败立即抛出错误并清理资源。
+密钥与消费者只能在启动前设置。消费者名称必须唯一，并在跨重启时保持稳定。
+主服务 `start()` 必须在主线程调用，阻塞运行；没有公共 `stop()`。Ctrl+C/SIGTERM 请求停止，
+所有子服务停止领取新任务，等待已执行任务结束，显示各服务剩余数量和总体退出进度，释放资源后返回。
+重复信号不打断清理；同步消费者耗时会延迟退出。实例只运行一次。未启动的实例可用 `close()` 释放资源。
 
-完整示例：
-
-- [basic.py](examples/basic.py)：实际 SDK、系统环境变量、私钥、消费者与跨平台信号关闭。
-- [offline.py](examples/offline.py)：无凭据演示，运行 `python examples/offline.py`。
-- [http_consumer.py](examples/http_consumer.py)：自定义影刀控制台队列 HTTP 消费者，需接入方提供真实接口协议。
-
-HTTP 示例的注册方式（HTTP 客户端应覆盖整个服务生命周期）：
-
-```python
-import httpx
-from examples.http_consumer import ShadowBotHttpConsumer
-
-async def run_http(service, queue_url, headers, build_payload):
-    async with httpx.AsyncClient() as client:
-        consumer = ShadowBotHttpConsumer(
-            client, queue_url=queue_url, headers=headers, build_payload=build_payload)
-        service.add_rule(TextRule(contains="订单"), consumer)
-        await service.run()
-```
-
-`examples` 位于源代码仓库，不属于框架安装包；使用时复制需要的消费者到自己的项目。
-安装 `.[examples]` 获取 HTTP 示例依赖。框架不内置业务推送、重试或幂等保证。
+消费者可为同步函数、异步函数或异步可调用对象，注册时识别类型。每次调用收到独立消息副本。
+异步消费者在工作线程的事件循环中运行，应在回调内管理异步资源，避免跨工作线程共享绑定事件循环的客户端。
+注册接口为 `add_consumer(name, match_text, is_regex, callback)`：
+`is_regex=False` 时对 `message.text` 做区分大小写的子串匹配，`True` 时使用正则 search。
+正则在注册时校验并编译；空匹配文本匹配所有文本消息。只有命中条件才调用处理函数。
+未命中的消息按消费者持久化为 `skipped`，重启不重复检查；修改过滤条件时如需重新处理，请使用新消费者名称。
+不保证消费者执行顺序。
 
 ## 配置
 
-配置通过 `ArchiveConfig` 显式传入，修改后重建服务。框架不读取 `.env` 或独立配置文件，
-不修改应用日志配置。建议调用方使用 `logging.basicConfig(level=logging.INFO)`。
-
-| 字段 | 默认值 | 含义 |
+| 构造参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `corp_id` | 必填 | 企业 ID |
-| `archive_secret` | 必填 | Pydantic SecretStr，不在配置 repr 中显示 |
-| `database_url` | `sqlite:///./wecom_archive.db` | 当前工作目录下的 SQLite 文件 |
-| `poll_interval` | `1.0` | 每批结束后的轮询等待秒数，失败同样等待 |
-| `batch_size` | `1000` | 每次最多拉取 1–1000 条 |
-| `api_timeout` | `5` | SDK 请求超时秒数 |
-| `proxy` | 空字符串 | SDK 代理 |
-| `consumption_window_seconds` | `300` | 发送时间窗口；`None` 关闭限制 |
-| `queue_capacity` | `1000` | 待消费规则命中的最大队列长度 |
-| `consumer_workers` | `4` | 并发消费者工作任务数；1 为串行 |
-| `shutdown_timeout` | `30` | 停止后等待分发与消费排空的秒数 |
+| `corp_id` / `archive_secret` | 必填 | 企业 ID / 会话存档 Secret |
+| `database_url` | `sqlite:///./wecom_archive.db` | 数据库 URL |
+| `proxy` | 空字符串 | SDK 请求代理 |
+| `timeout` | `5` | SDK 请求超时秒数 |
+| `batch_size` | `1000` | 单次拉取数量，1–1000 |
+| `consumption_window_seconds` | `300` | 消息发送时间窗口秒数，必须为正数 |
+| `pull` / `decrypt` / `parse` | `ServiceConfig()` | 各服务线程数及空闲轮询间隔 |
+| `consume` | `ServiceConfig(threads=4)` | 消费服务线程数及空闲轮询间隔 |
+| `client` | 内置 FinanceClient | 可注入实现 ArchiveClient 协议的替身 |
 
-数据库 URL 示例：
+`ServiceConfig(threads=1, poll_interval=1.0)` 为各服务独立配置；拉取固定单线程。
+数据库支持 SQLite、MySQL、PostgreSQL；同一数据库仅允许一个主服务实例。
+SQLite 使用文件锁，MySQL/PostgreSQL 使用数据库会话锁。实例锁在构造时获取，直到关闭后释放。
+同一原生 SDK 句柄的调用使用锁保护；增加解密线程不会使共享原生 SDK 同时执行。
+密钥按版本精确匹配，没有版本 0 回退；私钥只保留在内存。
 
-```text
-sqlite:///./wecom_archive.db
-mysql+pymysql://user:password@127.0.0.1:3306/archive?charset=utf8mb4
-postgresql+psycopg://user:password@127.0.0.1:5432/archive
-```
+## 数据与处理语义
 
-先创建 MySQL/PostgreSQL 数据库，再交给框架初始化表。MySQL 使用 InnoDB 与 utf8mb4；
-消息 ID 列使用区分大小写的排序规则。每个数据库只运行一个采集实例。
-私钥可注册多个版本；版本 0 是未匹配版本时的回退密钥。密钥只留在内存，不写入数据库。
+拉取消息保存及游标推进使用同一事务。拉取或保存失败保留游标，下轮重新读取已持久化游标继续拉取。
+解密保存原始字符串，不解析结构；解析当前仅支持文本，媒体类型标记 `unsupported`，不下载附件。
+统一消息对象包含 `msgid`、`seq`、`msgtype`、毫秒时间戳 `msgtime`、`sender`、`tolist`、`roomid`、
+`action`、完整明文 `data` 和便捷属性 `text`。`TextMessage` 对文本内容和公共字段进行 Pydantic 校验。
 
-## 存储与消费语义
+各阶段通过数据库状态衔接，多线程先提交任务领取再执行：
 
-1. 首次从游标 0 获取，随后使用数据库持久化游标。同步 SDK 与数据库工作在专用线程执行。
-2. 所有新密文、成功明文、类型分表和本批最大游标在同一事务提交。失败全部回滚。
-3. 解密失败保留密文并记录错误；类型解析失败保留密文和完整明文；未知类型跳过类型分表。
-4. 以消息 ID 去重，重复拉取不再解密或消费。本批内部重复同样去重。`switch` 明文也保留。
-5. 成功提交后，以消息发送时间检查消费窗口，随后匹配规则并进入进程内有界队列。
+- 解密：`pending` → `processing` → `success` / `failed` / `waiting_key`。
+- 解析：`pending` → `processing` → `success` / `failed` / `unsupported`。
+- 每个消息 × 消费者：`pending` → `processing` → `success` / `failed` / `expired` / `skipped`。
 
-开启时间窗口时，缺失/无效发送时间、未来时间或超出窗口的消息只存档。窗口边界包含恰好等于上限的消息。
-一条消息开始分发时只检查一次，已经符合窗口的规则命中不会因入队等待或排队而被丢弃。
-关闭窗口也只处理本次新入库消息，不重放数据库已有消息。
+每次启动只恢复 `processing` 为 `pending`；失败、成功及暂不支持状态保留，不自动重试。
+已配置对应密钥版本的 `waiting_key` 消息在启动时单独恢复为待解密，其余继续等待。
+新增消息类型支持后，用户手动将相应 `archive_decrypted.status` 重置为 `pending` 才会重新解析。
 
-消费者异常只记录消息 ID 和异常类型，不自动重试，不影响后续任务。业务需要详细错误时请在消费者内部记录。
-队列满时等待，停止继续拉取；内存同时容纳至多一个拉取批次、一个有界队列和工作任务中的消息。
-并发消费不保证完成顺序，消费者应使用异步 I/O 并配合取消，不应阻塞事件循环或吞掉外部取消。
+消费领取时及准备调用前均检查消息时间窗口：只消费最近 5 分钟内的消息，未来消息等待进入窗口。
+新增消费者只处理窗口内且该消费者尚未成功、失败或过期的消息；其他消费者的状态不影响它。
+已经开始的调用不会因超出窗口被中断。窗口外消息保留解析结果。一个消费者失败不影响其他消费者。
 
-调用 `service.stop()` 请求正常关闭，再等待 `run()` 返回。关闭先停止后续拉取，限时等待当前分发和队列；
-主线程运行 `run()` 时默认接管 Ctrl+C/SIGTERM，将其转换为正常关闭请求；关闭期间重复信号不会打断清理，
-返回或异常退出后恢复原信号处理器。嵌入已有应用时可用 `run(handle_signals=False)` 由宿主处理信号；
-后台线程运行时不会修改进程信号处理器，应由调用方调用 `stop()`。
-超时取消工作任务，丢弃剩余消费。不恢复消费任务，不承诺消费必达或业务副作用恰好执行一次。
-取消 `run()` 同样会清理资源。原生 SDK/数据库线程无法安全强杀，销毁资源前仍须等当前调用返回；
-`shutdown_timeout` 限制消费排空，底层连接/请求超时应按运行环境另行设置。强制结束进程会丢失未完成消费。
+**重复消费风险：**消费者已完成业务操作，但进程在保存成功状态前退出，重启后可能再次调用。
+请按业务需要以消息 ID 和消费者名称自行保证幂等。第一版没有持久化消费者记录，升级后窗口内历史消息也可能再次消费。
 
-表结构、支持类型、重构取舍见 [设计说明](doc/重构设计.md)。
-数据库初始化、显式升级和旧开发库处理见 [迁移说明](doc/数据库迁移.md)。
+## 迁移与验证
 
-## 开发与验证
-
-### GitHub Actions 自动编译
-
-[build-wheels 工作流](.github/workflows/build.yml) 和
-[测试工作流](.github/workflows/tests.yml) 在 `main` 分支收到推送时自动运行，
-包括 PR 合并进入 `main`。编译工作流还支持 `v*` 标签推送和手动触发。
-
-使用现有 Nuitka 构建后端，分别生成 Windows x64、Linux x64 的 Python 3.10
-编译 wheel，共两个产物。每个任务安装 wheel，在源码目录外检查编译模块和数据库迁移，
-通过后上传到该次运行页面的 **Artifacts**，保留 14 天。推送版本标签（例如 `v0.1.0`）
-还会创建 GitHub Release 并发布到 PyPI；普通分支推送仅编译。
-下载并解压对应平台和 Python 版本的产物后，运行 `python -m pip install <文件名>.whl`。
-
-Linux 产物基于 Ubuntu 22.04 构建，经 auditwheel 修复为 `manylinux_2_35_x86_64`，
-需要 glibc 2.35 或更新版本。
-wheel 不包含第三方依赖及企业微信原生 SDK，安装时仍需满足依赖和 SDK 的运行要求。
-
-PyPI 发布使用 Trusted Publishing。在 PyPI 项目的 Publishing 页面（首次发布使用
-账户的 Publishing 页面添加 pending publisher）配置 GitHub 所有者 `911061873`、
-仓库 `WeComArchive`、工作流 `build.yml`、环境 `pypi`。无需保存 API Token。
-
-### 本地验证
+空库自动初始化；已有库必须显式升级，见 [数据库迁移](doc/数据库迁移.md)。
+完整架构见 [重构设计](doc/重构设计.md)。
 
 ```shell
-uv sync --all-extras
-uv run pytest
-uv build
+python -m pytest
+python -m ruff check src tests examples scripts
+python -m ruff format --check src tests examples scripts
+python -m build --wheel
 ```
 
-默认测试使用独立临时 SQLite 文件。真实 MySQL/PostgreSQL 测试通过环境变量
-`WECOM_TEST_DATABASE_URL` 指定**独立空库**后运行 `pytest`；测试拒绝启动时已经有表的外部库。
-测试会清理自己创建的表，禁止指向业务库。CI 矩阵见 [.github/workflows/tests.yml](.github/workflows/tests.yml)，
-覆盖 Python 3.10/3.12、SQLite、MySQL 8.4 和 PostgreSQL 17。
-SDK 测试使用替身与真实 RSA 运算，不会请求企业微信或发送影刀消息。
-本次三种数据库的实际运行结果见 [验证记录](doc/验证记录.md)。
+测试默认使用独立 SQLite 文件；`WECOM_TEST_DATABASE_URL` 可指定独立空 MySQL/PostgreSQL 测试库。
+测试拒绝清理已有业务库。SDK 使用替身及真实 RSA 运算，不访问企业微信。
+[basic.py](examples/basic.py) 为真实 SDK 示例；[offline.py](examples/offline.py) 无需凭据；
+[http_consumer.py](examples/http_consumer.py) 提供自定义 HTTP 消费者，需自行适配业务接口。
 
-## 日志持久化
+自动构建保留现有 Nuitka wheel 工作流；迁移脚本随包分发，`scripts/verify_wheel.py` 验证编译模块和迁移。
 
-创建 `MessageArchiveService` 时自动在当前用户家目录的 `wecomarchive` 文件夹中配置 UTF-8 文件日志：
+## 日志
 
-- `wecomarchive.log`：INFO、WARNING 日志，每个文件 10 MiB，保留 5 个轮转备份。
-- `error.log`：ERROR、CRITICAL 日志，持续追加，不限制大小、不自动清理；包含采集、存储、解密、类型解析和消费失败。
-
-同时保存 `pyweworkfinance` 的 WARNING 及以上日志。重复创建服务不会重复添加文件处理器，调用方已有的控制台日志配置继续生效。
+构造主服务时在用户家目录 `wecomarchive` 中配置 UTF-8 文件日志。
+`wecomarchive.log` 保存 INFO/WARNING，单文件 10 MiB，保留 5 个轮转备份；
+`error.log` 追加 ERROR/CRITICAL，包含各阶段失败；同时保存 pyweworkfinance 的 WARNING 及以上日志。
+重复配置不重复添加处理器，已有应用日志配置继续生效。错误只记录消息 ID、消费者名称及异常类型，不记录明文或私钥。

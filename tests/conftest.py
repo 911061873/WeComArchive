@@ -1,11 +1,12 @@
+import json
 import logging
 import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, inspect
 
-from wecomarchive.db import Base, Database
+from wecomarchive.db import Database
 from wecomarchive.logging_setup import _ArchiveErrorFileHandler, _ArchiveRotatingFileHandler
 from wecomarchive.models import EncryptedChat
 
@@ -44,9 +45,9 @@ def db(tmp_path, external_database_url):
     database = Database(external_database_url or f"sqlite:///{tmp_path / 'archive.db'}")
     database.initialize()
     yield database
-    Base.metadata.drop_all(database.engine)
-    with database.engine.begin() as connection:
-        connection.execute(text("DROP TABLE alembic_version"))
+    metadata = MetaData()
+    metadata.reflect(bind=database.engine)
+    metadata.drop_all(database.engine)
     database.dispose()
 
 
@@ -90,12 +91,23 @@ class FakeClient:
             raise item
         return item
 
+    def initialize(self):
+        pass
+
+    def set_private_key(self, pem, version):
+        pass
+
+    def key_versions(self):
+        return {1}
+
     def decrypt(self, message):
         self.decrypted.append(message.msgid)
         value = self.data.get(message.msgid, plaintext())
         if isinstance(value, Exception):
             raise value
-        return value
+        if isinstance(value, str):
+            return value
+        return json.dumps({"msgid": message.msgid, **value}, ensure_ascii=False)
 
     def close(self):
         self.closed = True

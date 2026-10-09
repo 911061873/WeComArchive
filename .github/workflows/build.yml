@@ -59,8 +59,6 @@ jobs:
           python -m pip install dist/*.whl
           cd "$RUNNER_TEMP"
           python "$GITHUB_WORKSPACE/scripts/verify_wheel.py"
-          wecomarchive-db upgrade --database-url sqlite:///wheel-cli.db
-          wecomarchive-db current --database-url sqlite:///wheel-cli.db
       - name: 上传 wheel 安装包
         uses: actions/upload-artifact@v4
         with:

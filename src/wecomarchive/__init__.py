@@ -1,11 +1,12 @@
-from .config import ArchiveConfig
-from .models import ConsumerMessage
-from .rules import TextRule
-from .service import MessageArchiveService
+from .config import ServiceConfig, WeComArchiveConfig
+from .main import WeComArchive
+from .models import SUPPORTED_MESSAGE_TYPES, ConsumerMessage, TextMessage
 
 __all__ = [
-    "ArchiveConfig",
+    "WeComArchive",
+    "WeComArchiveConfig",
+    "ServiceConfig",
     "ConsumerMessage",
-    "MessageArchiveService",
-    "TextRule",
+    "TextMessage",
+    "SUPPORTED_MESSAGE_TYPES",
 ]

@@ -45,7 +45,7 @@ MEDIA = {"image", "voice", "video", "emotion", "file", "meeting_voice_call", "vo
 MESSAGE_ID = sa.String(256).with_variant(sa.String(256, collation="utf8mb4_bin"), "mysql")
 
 
-def upgrade():
+def upgrade() -> None:
     op.create_table(
         "archive_progress",
         sa.Column("id", sa.Integer, primary_key=True),
@@ -89,7 +89,7 @@ def upgrade():
         op.create_table(f"archive_type_{name}", *fields)
 
 
-def downgrade():
+def downgrade() -> None:
     for name in reversed(TYPES):
         op.drop_table(f"archive_type_{name}")
     op.drop_table("archive_decrypted")

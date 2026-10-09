@@ -55,4 +55,3 @@ jobs:
           /tmp/archive-wheel-test/bin/pip install dist/*.whl
           cd /tmp
           /tmp/archive-wheel-test/bin/python "$GITHUB_WORKSPACE/scripts/verify_wheel.py"
-          /tmp/archive-wheel-test/bin/wecomarchive-db upgrade --database-url sqlite:///wheel-test.db

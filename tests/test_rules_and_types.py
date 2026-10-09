@@ -1,71 +1,64 @@
 import pytest
-from conftest import chat, plaintext
 from pydantic import ValidationError
 
-from wecomarchive import ArchiveConfig, TextRule
-from wecomarchive.parser import MEDIA_TYPES, TYPE_SECTIONS, parse_type
-from wecomarchive.storage import prepare
+from wecomarchive import ServiceConfig, WeComArchiveConfig
+from wecomarchive.services.consume import ConsumeService
 
 
 @pytest.mark.parametrize(
-    "kwargs", [{}, {"contains": "a", "regex": "b"}, {"contains": ""}, {"regex": "["}]
-)
-def test_invalid_rules(kwargs):
-    with pytest.raises(ValidationError):
-        TextRule(**kwargs)
-
-
-def test_only_text_body_matches():
-    message = prepare(chat(), plaintext()).message
-    assert TextRule(contains="订单").matches(message)
-    assert TextRule(regex=r"订单\s+\d+").matches(message)
-    assert not TextRule(contains="sender").matches(message)
-    assert not TextRule(contains="订单").matches(
-        prepare(chat(), plaintext(msgtype="markdown")).message
-    )
-    assert not TextRule(contains="订单").matches(prepare(chat(), plaintext(text={})).message)
-
-
-@pytest.mark.parametrize("kind", list(TYPE_SECTIONS))
-def test_supported_sections(kind):
-    section = {"unknown_future_field": "保留"}
-    if kind == "text":
-        section["content"] = "hello"
-    if kind in MEDIA_TYPES:
-        section.update(sdkfileid="id", filename="文件", md5sum="md5")
-    if kind in {"mixed", "chatrecord", "note"}:
-        section["items" if kind == "note" else "item"] = [{"type": "future", "content": "opaque"}]
-    result = parse_type(kind, {TYPE_SECTIONS[kind]: section})
-    assert result["payload"] == section
-    assert parse_type("unknown", {}) is None
-
-
-@pytest.mark.parametrize(
-    "kwargs",
+    "changes",
     [
-        {"poll_interval": 0},
-        {"poll_interval": float("nan")},
-        {"batch_size": 1001},
-        {"queue_capacity": 0},
-        {"consumer_workers": 0},
-        {"shutdown_timeout": 0},
-        {"consumption_window_seconds": -1},
         {"corp_id": " "},
-        {"archive_secret": ""},
-        {"queue_capacity": True},
-        {"obsolete_setting": 1},
+        {"archive_secret": " "},
+        {"batch_size": 1001},
+        {"consumption_window_seconds": 0},
+        {"pull": {"threads": 2}},
+        {"decrypt": {"threads": 0}},
+        {"parse": {"poll_interval": float("inf")}},
+        {"api_timeout": True},
     ],
 )
-def test_config_validation(kwargs):
-    values = {"corp_id": "corp", "archive_secret": "secret", **kwargs}
+def test_invalid_configuration(changes):
     with pytest.raises(ValidationError):
-        ArchiveConfig(**values)
+        WeComArchiveConfig(**({"corp_id": "企业", "archive_secret": "密钥"} | changes))
 
 
-def test_secret_is_redacted_and_window_can_be_disabled():
-    config = ArchiveConfig(
-        corp_id="corp", archive_secret="do-not-print", consumption_window_seconds=None
-    )
-    assert "do-not-print" not in repr(config)
-    assert config.consumption_window_seconds is None
-    assert config.database_url.startswith("sqlite:")
+def test_secret_is_hidden():
+    config = WeComArchiveConfig(corp_id="企业", archive_secret="秘密值")
+    assert "秘密值" not in repr(config)
+
+
+def test_registration_validation_and_async_callable():
+    service = ConsumeService(ServiceConfig(), None, 300)
+    service.register("A", "", False, lambda message: None)
+    with pytest.raises(ValueError):
+        service.register("A", "", False, lambda message: None)
+    with pytest.raises(ValueError):
+        service.register(" ", "", False, lambda message: None)
+    with pytest.raises(TypeError):
+        service.register("B", "", False, None)
+
+    class Consumer:
+        async def __call__(self, message):
+            pass
+
+    service.register("异步对象", "", False, Consumer())
+    assert service.registrations["异步对象"].asynchronous
+    service._started = True
+    with pytest.raises(RuntimeError):
+        service.register("C", "", False, lambda message: None)
+
+
+@pytest.mark.parametrize(
+    "match_text,is_regex,error",
+    [
+        (None, False, TypeError),
+        ("订单", 1, TypeError),
+        ("[", True, ValueError),
+    ],
+)
+def test_invalid_consumer_filter_is_rejected_at_registration(match_text, is_regex, error):
+    service = ConsumeService(ServiceConfig(), None, 300)
+    with pytest.raises(error):
+        service.register("消费者", match_text, is_regex, lambda _: None)
+    assert service.registrations == {}

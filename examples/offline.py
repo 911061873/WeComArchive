@@ -1,57 +1,64 @@
-"""无需企业微信凭据的完整演示：python examples/offline.py。"""
+"""无凭据演示；运行 python examples/offline.py，按 Ctrl+C 退出。"""
 
-import asyncio
-import tempfile
+import json
+import sys
 import time
 from pathlib import Path
 
-from wecomarchive import ArchiveConfig, MessageArchiveService, TextRule
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from wecomarchive import WeComArchive
 from wecomarchive.models import EncryptedChat
 
 
-class DemoClient:
+class OfflineClient:
+    def initialize(self):
+        pass
+
+    def key_versions(self):
+        return {1}
+
+    def set_private_key(self, pem, version):
+        pass
+
     def fetch(self, cursor):
-        if cursor:
+        if cursor >= 1:
             return []
         return [
             EncryptedChat(
                 seq=1,
-                msgid="demo-1",
+                msgid="offline-1",
                 publickey_ver=1,
-                encrypt_random_key="demo",
-                encrypt_chat_msg="demo",
+                encrypt_random_key="演示",
+                encrypt_chat_msg="演示",
             )
         ]
 
-    def decrypt(self, chat):
-        return {
-            "msgtype": "text",
-            "msgtime": int(time.time() * 1000),
-            "text": {"content": "新订单 123"},
-        }
+    def decrypt(self, message):
+        return json.dumps(
+            dict(
+                msgid=message.msgid,
+                msgtype="text",
+                msgtime=int(time.time() * 1000),
+                text={"content": "离线演示消息"},
+                **{"from": "演示发送者", "tolist": ["演示接收者"]},
+            ),
+            ensure_ascii=False,
+        )
 
     def close(self):
         pass
 
 
-async def main():
-    with tempfile.TemporaryDirectory() as directory:
-        service = MessageArchiveService(
-            ArchiveConfig(
-                corp_id="demo",
-                archive_secret="demo",
-                database_url=f"sqlite:///{Path(directory) / 'archive.db'}",
-            ),
-            client=DemoClient(),
+def main():
+    with WeComArchive(
+        "离线企业", "演示密钥", database_url="sqlite:///:memory:", client=OfflineClient()
+    ) as archive:
+        archive.add_consumer(
+            "打印消息", "", False, lambda message: print(message.msgid, message.text)
         )
-
-        async def consume(message):
-            print(f"消费完成：{message.msgid} {message.text}")
-            service.stop()
-
-        service.add_rule(TextRule(contains="订单"), consume)
-        await service.run()
+        archive.start()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
