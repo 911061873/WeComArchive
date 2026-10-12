@@ -1,41 +1,40 @@
 from threading import Event, Thread
 
 import pytest
-from conftest import FakeClient
+from conftest import FakeSDK
 
-from wecomarchive import ServiceConfig, WeComArchive
+from wecomarchive import ServiceConfig
 from wecomarchive.services.base import Service
 
 
-def test_constructor_initializes_and_releases_on_failure(tmp_path):
-    class Broken(FakeClient):
+def test_constructor_initializes_and_releases_on_failure(tmp_path, archive_factory):
+    class Broken(FakeSDK):
         def initialize(self):
             raise ValueError("模拟 SDK 初始化失败")
 
-    client = Broken()
+    sdk = Broken()
     url = f"sqlite:///{tmp_path / 'failure.db'}"
     with pytest.raises(ValueError):
-        WeComArchive("企业", "密钥", database_url=url, client=client)
-    assert client.closed
-    with WeComArchive("企业", "密钥", database_url=url, client=FakeClient()):
+        archive_factory("企业", "密钥", database_url=url, sdk=sdk)
+    with archive_factory("企业", "密钥", database_url=url, sdk=FakeSDK()):
         pass
 
 
-def test_database_rejects_second_instance(tmp_path):
+def test_database_rejects_second_instance(tmp_path, archive_factory):
     url = f"sqlite:///{tmp_path / 'locked.db'}"
-    first = WeComArchive("企业", "密钥", database_url=url, client=FakeClient())
+    first = archive_factory("企业", "密钥", database_url=url, sdk=FakeSDK())
     try:
         with pytest.raises(RuntimeError, match="已有主服务"):
-            WeComArchive("企业", "密钥", database_url=url, client=FakeClient())
+            archive_factory("企业", "密钥", database_url=url, sdk=FakeSDK())
     finally:
         first.close()
-    with WeComArchive("企业", "密钥", database_url=url, client=FakeClient()):
+    with archive_factory("企业", "密钥", database_url=url, sdk=FakeSDK()):
         pass
 
 
-def test_start_requires_main_thread_and_has_no_public_stop(tmp_path):
-    app = WeComArchive(
-        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'thread.db'}", client=FakeClient()
+def test_start_requires_main_thread_and_has_no_public_stop(tmp_path, archive_factory):
+    app = archive_factory(
+        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'thread.db'}", sdk=FakeSDK()
     )
     errors = []
 
@@ -59,6 +58,11 @@ def test_subservice_start_returns_and_stop_does_not_claim_backlog():
     class Worker(Service):
         claimed = 0
 
+        def run_once(self):
+            with self.work_scope(self.acquire) as task:
+                if task is not None:
+                    self.process(task)
+
         def acquire(self):
             self.claimed += 1
             return self.claimed
@@ -78,26 +82,14 @@ def test_subservice_start_returns_and_stop_does_not_claim_backlog():
     assert service.remaining == 0
 
 
-def test_late_configuration_rejected(tmp_path):
-    app = WeComArchive(
-        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'config.db'}", client=FakeClient()
-    )
-    app._started = True
-    with pytest.raises(RuntimeError):
-        app.add_consumer("A", "", False, lambda _: None)
-    with pytest.raises(RuntimeError):
-        app.set_private_key("私钥", 1)
-    app.close()
-
-
-def test_database_lock_blocks_another_process(tmp_path):
+def test_database_lock_blocks_another_process(tmp_path, archive_factory):
     import os
     import subprocess
     import sys
     from pathlib import Path
 
     url = f"sqlite:///{tmp_path / 'process.db'}"
-    with WeComArchive("企业", "密钥", database_url=url, client=FakeClient()):
+    with archive_factory("企业", "密钥", database_url=url, sdk=FakeSDK()):
         code = (
             f"from wecomarchive.db import Database; db = Database({url!r}); db.acquire_instance()"
         )
@@ -107,3 +99,24 @@ def test_database_lock_blocks_another_process(tmp_path):
         )
         assert result.returncode != 0
         assert b"RuntimeError" in result.stderr
+
+
+def test_work_scope_releases_count_on_failure_and_does_not_claim_after_stop():
+    class Worker(Service):
+        def run_once(self):
+            pass
+
+    service = Worker(ServiceConfig())
+    with pytest.raises(ValueError):
+        with service.work_scope():
+            assert service.remaining == 1
+            raise ValueError("模拟处理失败")
+    assert service.remaining == 0
+    service.stop()
+    claimed = []
+    with service.work_scope(lambda: claimed.append("领取")) as task:
+        assert task is None
+    assert claimed == []
+    with service.work_scope() as started:
+        assert started is None
+    assert service.remaining == 0

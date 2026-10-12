@@ -4,7 +4,7 @@ from logging.handlers import RotatingFileHandler
 from wecomarchive.logging_setup import configure_logging
 
 
-def test_persistent_logs_and_repeated_configuration(tmp_path):
+def test_persistent_logs_and_repeated_configuration(tmp_path, capsys):
     configure_logging()
     configure_logging()
     logger = logging.getLogger("wecomarchive.service")
@@ -12,6 +12,13 @@ def test_persistent_logs_and_repeated_configuration(tmp_path):
     logger.warning("警告消息")
     logger.error("错误消息")
     logging.getLogger("pyweworkfinance").error("SDK 错误")
+    console = capsys.readouterr().err
+    for message in ("普通消息", "警告消息", "错误消息", "SDK 错误"):
+        assert console.count(message) == 1
+    logger.setLevel(logging.DEBUG)
+    logger.debug("调试消息")
+    assert "调试消息" in capsys.readouterr().err
+    logger.setLevel(logging.NOTSET)
     directory = tmp_path / "wecomarchive"
     regular = (directory / "wecomarchive.log").read_text(encoding="utf-8")
     errors = (directory / "error.log").read_text(encoding="utf-8")

@@ -8,67 +8,74 @@ from time import sleep
 from types import FrameType
 from typing import Any
 
+from Crypto.PublicKey import RSA
 from pydantic import SecretStr
+from pyweworkfinance import WeWorkFinance
 
-from .config import ServiceConfig, WeComArchiveConfig
+from .config import WeComArchiveConfig
 from .db import Database
 from .logging_setup import configure_logging
 from .models import ConsumerMessage
-from .sdk import ArchiveClient, FinanceClient
 from .services import ConsumeService, DecryptService, ParseService, PullService, Service
 from .storage import ArchiveStore
 
 
 class WeComArchive:
-    """第二版入口：构造初始化资源，start 阻塞直到 Ctrl+C 后完成退出。"""
-
     def __init__(
         self,
         corp_id: str,
-        archive_secret: str | SecretStr,
+        archive_secret: str,
         *,
         database_url: str = "sqlite:///./wecom_archive.db",
         proxy: str = "",
         timeout: int = 5,
         batch_size: int = 1000,
         consumption_window_seconds: float = 300,
-        pull: ServiceConfig | None = None,
-        decrypt: ServiceConfig | None = None,
-        parse: ServiceConfig | None = None,
-        consume: ServiceConfig | None = None,
-        client: ArchiveClient | None = None,
     ) -> None:
         self.config = WeComArchiveConfig(
             corp_id=corp_id,
-            archive_secret=archive_secret,
+            archive_secret=SecretStr(archive_secret),
             database_url=database_url,
             proxy=proxy,
             api_timeout=timeout,
             batch_size=batch_size,
             consumption_window_seconds=consumption_window_seconds,
-            pull=pull if pull is not None else ServiceConfig(),
-            decrypt=decrypt if decrypt is not None else ServiceConfig(),
-            parse=parse if parse is not None else ServiceConfig(),
-            consume=consume if consume is not None else ServiceConfig(threads=4),
         )
-        self._started = False
         self._closed = False
         self._running = False
         self._stop_event = Event()
         self._gate = RLock()
-        self._client = client if client is not None else FinanceClient(self.config)
+        self._sdk: WeWorkFinance | None = None
+        self._sdk_lock = RLock()
+        self._keys: dict[int, RSA.RsaKey] = {}
         self._db = None
         try:
             configure_logging()
             self._db = Database(database_url)
             self._db.acquire_instance()
             self._db.initialize()
-            self._client.initialize()
+            self._sdk = WeWorkFinance(
+                corpid=self.config.corp_id,
+                secret=self.config.archive_secret.get_secret_value(),
+                default_timeout=self.config.api_timeout,
+            )
             self._store = ArchiveStore(self._db)
-            common = dict(stop_event=self._stop_event, gate=self._gate)
-            self._pull_service = PullService(self.config.pull, self._store, self._client, **common)
+            common = dict(
+                stop_event=self._stop_event,
+                gate=self._gate,
+                sdk=self._sdk,
+                sdk_lock=self._sdk_lock,
+            )
+            self._pull_service = PullService(
+                self.config.pull,
+                self._store,
+                batch_size=self.config.batch_size,
+                timeout=self.config.api_timeout,
+                proxy=self.config.proxy,
+                **common,
+            )
             self._decrypt_service = DecryptService(
-                self.config.decrypt, self._store, self._client, **common
+                self.config.decrypt, self._store, keys=self._keys, **common
             )
             self._parse_service = ParseService(self.config.parse, self._store, **common)
             self._consume_service = ConsumeService(
@@ -77,7 +84,7 @@ class WeComArchive:
                 self.config.consumption_window_seconds,
                 **common,
             )
-            self._services: dict[str, Service[Any]] = {
+            self._services: dict[str, Service] = {
                 "拉取": self._pull_service,
                 "解密": self._decrypt_service,
                 "解析": self._parse_service,
@@ -87,13 +94,13 @@ class WeComArchive:
             self.close()
             raise
 
-    def _check_configurable(self) -> None:
-        if self._started or self._closed:
-            raise RuntimeError("请在启动前完成配置，关闭后不能再次使用")
-
     def set_private_key(self, pem: str | bytes, version: int = 1) -> None:
-        self._check_configurable()
-        self._client.set_private_key(pem, version)
+        if type(version) is not int or version < 0:
+            raise ValueError("密钥版本必须为非负整数")
+        key = RSA.import_key(pem)
+        if not key.has_private():
+            raise ValueError("需要 RSA 私钥")
+        self._keys[version] = key
 
     def add_consumer(
         self,
@@ -102,7 +109,6 @@ class WeComArchive:
         is_regex: bool,
         callback: Callable[[ConsumerMessage], Any],
     ) -> None:
-        self._check_configurable()
         self._consume_service.register(name, match_text, is_regex, callback)
 
     def close(self) -> None:
@@ -113,7 +119,10 @@ class WeComArchive:
             return
         self._closed = True
         try:
-            self._client.close()
+            with self._sdk_lock:
+                if self._sdk is not None:
+                    self._sdk._destroy()
+                    self._sdk = None
         finally:
             if self._db is not None:
                 self._db.dispose()
@@ -158,15 +167,13 @@ class WeComArchive:
         self.close()
 
     def start(self) -> None:
-        self._check_configurable()
         if current_thread() is not main_thread():
             raise RuntimeError("主服务 start 必须在主线程运行以监听 Ctrl+C")
-        self._started = True
         self._running = True
         try:
             with self._signals() as requested:
                 try:
-                    self._store.recover(self._client.key_versions())
+                    self._store.recover(set(self._keys))
                     for service in self._services.values():
                         service.start()
                     while not requested.wait(0.1):

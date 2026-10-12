@@ -4,13 +4,15 @@ import time
 from threading import Event, Thread
 
 import pytest
-from conftest import FakeClient, chat
+from conftest import FakeSDK, chat
 
-from wecomarchive import ServiceConfig, WeComArchive
+from wecomarchive import ServiceConfig
 from wecomarchive.db import ConsumerTask, Database
 
 
-def test_ctrl_c_waits_for_inflight_consumer_and_restores_handlers(tmp_path, monkeypatch, capsys):
+def test_ctrl_c_waits_for_inflight_consumer_and_restores_handlers(
+    tmp_path, monkeypatch, capsys, archive_factory
+):
     handlers = {}
     previous = {signal.SIGINT: object(), signal.SIGTERM: object()}
 
@@ -21,14 +23,14 @@ def test_ctrl_c_waits_for_inflight_consumer_and_restores_handlers(tmp_path, monk
 
     monkeypatch.setattr(signal, "signal", install)
     entered, release = Event(), Event()
-    client = FakeClient([[chat(), chat(2)]])
+    sdk = FakeSDK([[chat(), chat(2)]])
     url = f"sqlite:///{tmp_path / 'signals.db'}"
     config = ServiceConfig(poll_interval=0.01)
-    app = WeComArchive(
+    app = archive_factory(
         "企业",
         "密钥",
         database_url=url,
-        client=client,
+        sdk=sdk,
         pull=config,
         decrypt=config,
         parse=config,
@@ -49,14 +51,14 @@ def test_ctrl_c_waits_for_inflight_consumer_and_restores_handlers(tmp_path, monk
         # 连续信号不打断等待；关闭期间不释放 SDK。
         handlers[signal.SIGINT](signal.SIGINT, None)
         time.sleep(0.25)
-        assert not client.closed
+        assert not sdk.closed
         release.set()
 
     thread = Thread(target=interrupt)
     thread.start()
     app.start()
     thread.join()
-    assert client.closed
+    assert sdk.closed
     assert consumed == ["m1"]
     assert handlers == previous
     output = capsys.readouterr().out
@@ -67,18 +69,18 @@ def test_ctrl_c_waits_for_inflight_consumer_and_restores_handlers(tmp_path, monk
         app.start()
     db = Database(url)
     try:
-        with db.session() as session:
+        with db.session_factory() as session:
             assert session.get(ConsumerTask, ("m1", "消费者")).status == "success"
             assert session.get(ConsumerTask, ("m2", "消费者")) is None
     finally:
         db.dispose()
 
 
-def test_worker_failure_triggers_cleanup(tmp_path, monkeypatch):
+def test_worker_failure_triggers_cleanup(tmp_path, monkeypatch, archive_factory):
     monkeypatch.setattr(signal, "signal", lambda *_: signal.SIG_DFL)
-    client = FakeClient()
-    app = WeComArchive(
-        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'fatal.db'}", client=client
+    sdk = FakeSDK()
+    app = archive_factory(
+        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'fatal.db'}", sdk=sdk
     )
 
     def broken():
@@ -87,13 +89,13 @@ def test_worker_failure_triggers_cleanup(tmp_path, monkeypatch):
     app._services["解析"].acquire = broken
     with pytest.raises(RuntimeError, match="子服务异常"):
         app.start()
-    assert client.closed
+    assert sdk.closed
 
 
-def test_signal_install_failure_releases_resources(tmp_path, monkeypatch):
-    client = FakeClient()
-    app = WeComArchive(
-        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'install.db'}", client=client
+def test_signal_install_failure_releases_resources(tmp_path, monkeypatch, archive_factory):
+    sdk = FakeSDK()
+    app = archive_factory(
+        "企业", "密钥", database_url=f"sqlite:///{tmp_path / 'install.db'}", sdk=sdk
     )
 
     def broken(*_args):
@@ -102,5 +104,5 @@ def test_signal_install_failure_releases_resources(tmp_path, monkeypatch):
     monkeypatch.setattr(signal, "signal", broken)
     with pytest.raises(ValueError):
         app.start()
-    assert client.closed
+    assert sdk.closed
     assert app._closed

@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from wecomarchive import ConsumerMessage, ServiceConfig, WeComArchive
+from wecomarchive import ConsumerMessage, WeComArchive
 
 
 def consume(message: ConsumerMessage):
@@ -15,8 +15,6 @@ def main():
     with WeComArchive(
         os.environ["WECOM_CORP_ID"],
         os.environ["WECOM_ARCHIVE_SECRET"],
-        decrypt=ServiceConfig(threads=2),
-        consume=ServiceConfig(threads=4),
     ) as archive:
         archive.set_private_key(
             Path(os.environ["WECOM_PRIVATE_KEY_PATH"]).read_bytes(),

@@ -2,9 +2,10 @@ import os
 import sqlite3
 from pathlib import Path
 from threading import RLock
+from typing import Any
 
 from sqlalchemy import create_engine, event, inspect
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import ConnectionPoolEntry, StaticPool
 
@@ -16,7 +17,7 @@ class Database:
         parsed = make_url(url)
         if parsed.get_backend_name() not in {"sqlite", "mysql", "postgresql"}:
             raise ValueError("仅支持 SQLite、MySQL 和 PostgreSQL")
-        options = {"pool_pre_ping": True}
+        options: dict[str, Any] = {"pool_pre_ping": True}
         if parsed.get_backend_name() == "sqlite":
             options["connect_args"] = {"check_same_thread": False, "timeout": 30}
             if parsed.database in {None, "", ":memory:"}:
@@ -30,7 +31,7 @@ class Database:
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.close()
 
-        self.session = sessionmaker(self.engine, expire_on_commit=False)
+        self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
 
     def initialize(self) -> None:
         """空库自动安装；已有库只检查版本，绝不隐式升级。"""
@@ -55,7 +56,7 @@ class Database:
         backend = self.engine.dialect.name
         if backend == "sqlite":
             database = self.engine.url.database
-            if database in {None, "", ":memory:"}:
+            if not database or database == ":memory:":
                 return
             target = Path(database).resolve().with_suffix(Path(database).suffix + ".lock")
             handle = open(target, "a+b")
@@ -101,9 +102,7 @@ class Database:
         handle, self._instance_lock = self._instance_lock, None
         if handle is None:
             return
-        if self.engine.dialect.name == "sqlite":
-            handle.close()
-        else:
+        if isinstance(handle, Connection):
             try:
                 if self.engine.dialect.name == "postgresql":
                     handle.execute(text("SELECT pg_advisory_unlock(192837465)"))
@@ -115,3 +114,5 @@ class Database:
                     )
             finally:
                 handle.close()
+        else:
+            handle.close()

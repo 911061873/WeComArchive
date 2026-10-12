@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -14,6 +15,10 @@ async def test(message: ConsumerMessage):
 
 
 def main():
+    # logging.basicConfig(
+    #     level=logging.DEBUG,
+    #     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    # )
     corp_id = os.getenv("WECOM_CORP_ID")
     if not corp_id or not corp_id.strip():
         raise ValueError("请设置非空的环境变量 WECOM_CORP_ID")
@@ -25,6 +30,7 @@ def main():
     service = WeComArchive(
         corp_id=corp_id, archive_secret=archive_secret, proxy=proxy, database_url=database_url
     )
+    logging.getLogger("wecomarchive.services.pull").setLevel(logging.DEBUG)
     service.set_private_key(Path("private_key.pem").read_bytes(), version=1)
     service.add_consumer("本地规则消费者1", "订单", False, consume)
     service.add_consumer("本地规则消费者2", "工单\\s*\\d+", True, consume)

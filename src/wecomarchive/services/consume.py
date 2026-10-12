@@ -25,7 +25,7 @@ class ConsumerRegistration:
     pattern: re.Pattern[str] | None
 
 
-class ConsumeService(Service[tuple[str, ConsumerMessage]]):
+class ConsumeService(Service):
     def __init__(
         self,
         config: ServiceConfig,
@@ -65,6 +65,13 @@ class ConsumeService(Service[tuple[str, ConsumerMessage]]):
             getattr(callback, "__call__", None)
         )
         self.registrations[name] = ConsumerRegistration(callback, asynchronous, match_text, pattern)
+
+    def run_once(self) -> None:
+        with self.work_scope(self.acquire) as task:
+            if task is not None:
+                self.process(task)
+        if task is None:
+            self.wait()
 
     def acquire(self) -> tuple[str, ConsumerMessage] | None:
         names = list(self.registrations)

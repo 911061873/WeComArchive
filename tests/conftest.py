@@ -1,13 +1,21 @@
 import json
 import logging
 import os
+from base64 import b64encode
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from Crypto.Cipher import PKCS1_v1_5
+from Crypto.PublicKey import RSA
 from sqlalchemy import MetaData, inspect
 
 from wecomarchive.db import Database
-from wecomarchive.logging_setup import _ArchiveErrorFileHandler, _ArchiveRotatingFileHandler
+from wecomarchive.logging_setup import (
+    _ArchiveConsoleHandler,
+    _ArchiveErrorFileHandler,
+    _ArchiveRotatingFileHandler,
+)
 from wecomarchive.models import EncryptedChat
 
 
@@ -21,7 +29,10 @@ def isolated_log_home(tmp_path, monkeypatch):
     yield
     for logger, level in zip(loggers, levels):
         for handler in logger.handlers[:]:
-            if isinstance(handler, (_ArchiveRotatingFileHandler, _ArchiveErrorFileHandler)):
+            if isinstance(
+                handler,
+                (_ArchiveRotatingFileHandler, _ArchiveErrorFileHandler, _ArchiveConsoleHandler),
+            ):
                 logger.removeHandler(handler)
                 handler.close()
         logger.setLevel(level)
@@ -51,13 +62,18 @@ def db(tmp_path, external_database_url):
     database.dispose()
 
 
+TEST_KEY = RSA.generate(1024)
+
+
 def chat(seq=1, msgid=None, **extra):
     return EncryptedChat(
         seq=seq,
         msgid=msgid or f"m{seq}",
         publickey_ver=1,
-        encrypt_random_key="encrypted-key",
-        encrypt_chat_msg="encrypted-body",
+        encrypt_random_key=b64encode(
+            PKCS1_v1_5.new(TEST_KEY.public_key()).encrypt(b"random-key")
+        ).decode(),
+        encrypt_chat_msg=msgid or f"m{seq}",
         **extra,
     )
 
@@ -76,38 +92,75 @@ def plaintext(timestamp=None, **changes):
     return data
 
 
-class FakeClient:
+class FakeSDK:
     def __init__(self, batches=None, data=None):
         self.batches = list(batches or [])
         self.data = data or {}
         self.cursors = []
         self.decrypted = []
         self.closed = False
+        self.freed = []
+        self._lib = self
 
-    def fetch(self, cursor):
+    def get_chat_data(self, seq, **kwargs):
+        cursor = seq
         self.cursors.append(cursor)
         item = self.batches.pop(0) if self.batches else []
         if isinstance(item, Exception):
             raise item
-        return item
+        return SimpleNamespace(chatdata=item)
 
     def initialize(self):
         pass
 
-    def set_private_key(self, pem, version):
-        pass
+    def NewSlice(self):
+        return SimpleNamespace(content=b"")
 
-    def key_versions(self):
-        return {1}
-
-    def decrypt(self, message):
-        self.decrypted.append(message.msgid)
-        value = self.data.get(message.msgid, plaintext())
+    def DecryptData(self, random_key, body, buffer):
+        msgid = body.decode()
+        self.decrypted.append(msgid)
+        value = self.data.get(msgid, plaintext())
         if isinstance(value, Exception):
             raise value
-        if isinstance(value, str):
-            return value
-        return json.dumps({"msgid": message.msgid, **value}, ensure_ascii=False)
+        if not isinstance(value, str):
+            value = json.dumps({"msgid": msgid, **value}, ensure_ascii=False)
+        buffer.content = value.encode()
+        return 0
 
-    def close(self):
+    def GetContentFromSlice(self, buffer):
+        return buffer.content
+
+    def FreeSlice(self, buffer):
+        self.freed.append(buffer)
+
+    def _destroy(self):
         self.closed = True
+
+
+@pytest.fixture
+def archive_factory(monkeypatch):
+    from wecomarchive import WeComArchive
+
+    def create(*args, sdk=None, **kwargs):
+        configs = {
+            name: kwargs.pop(name)
+            for name in ("pull", "decrypt", "parse", "consume")
+            if name in kwargs
+        }
+
+        def make_sdk():
+            instance = sdk if sdk is not None else FakeSDK()
+            instance.initialize()
+            return instance
+
+        monkeypatch.setattr(
+            "wecomarchive.main.WeWorkFinance",
+            lambda **_: make_sdk(),
+        )
+        archive = WeComArchive(*args, **kwargs)
+        archive.set_private_key(TEST_KEY.export_key(), 1)
+        for name, config in configs.items():
+            getattr(archive, f"_{name}_service").config = config
+        return archive
+
+    return create

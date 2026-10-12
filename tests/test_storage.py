@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from wecomarchive import ServiceConfig
 from wecomarchive.db import ConsumerTask, DecryptedMessage, EncryptedMessage, ParsedMessage
-from wecomarchive.sdk import MissingKeyError
 from wecomarchive.services import ConsumeService, DecryptService, ParseService, PullService
 from wecomarchive.storage import ArchiveStore
 
@@ -20,12 +19,12 @@ def parsed(store, seq=1, timestamp=None):
     store.decrypted(item, json.dumps({"msgid": item.msgid, **plaintext(timestamp)}))
     service = ParseService(ServiceConfig(), store)
     service.process(service.acquire())
-    with store.db.session() as session:
+    with store.db.session_factory() as session:
         return session.get(ParsedMessage, item.msgid)
 
 
 def state(db, model, key):
-    with db.session() as session:
+    with db.session_factory() as session:
         return session.get(model, key).status
 
 
@@ -33,7 +32,7 @@ def test_cursor_dedup_and_atomic_rollback(db, monkeypatch):
     store = ArchiveStore(db)
     store.save_batch([chat(), chat(), chat(2)])
     assert store.cursor() == 2
-    with db.session() as session:
+    with db.session_factory() as session:
         assert len(session.scalars(select(EncryptedMessage)).all()) == 2
     from sqlalchemy import event
 
@@ -45,18 +44,18 @@ def test_cursor_dedup_and_atomic_rollback(db, monkeypatch):
         store.save_batch([chat(3)])
     event.remove(db.engine, "commit", fail)
     assert store.cursor() == 2
-    with db.session() as session:
+    with db.session_factory() as session:
         assert session.get(EncryptedMessage, "m3") is None
 
 
 def test_pull_failure_uses_saved_cursor_each_round(db):
-    from conftest import FakeClient
+    from conftest import FakeSDK
 
     store = ArchiveStore(db)
-    client = FakeClient([[chat()], RuntimeError("模拟拉取失败"), [chat(2)]])
-    service = PullService(ServiceConfig(poll_interval=0.001), store, client)
+    client = FakeSDK([[chat()], RuntimeError("模拟拉取失败"), [chat(2)]])
+    service = PullService(ServiceConfig(poll_interval=0.001), store, sdk=client)
     for _ in range(3):
-        service.process(service.acquire())
+        service.run_once()
     assert client.cursors == [0, 1, 1]
     assert store.cursor() == 2
 
@@ -70,15 +69,18 @@ def test_claim_is_unique_under_threads(db):
     assert len(ids) == len(set(ids)) == 20
 
 
-@pytest.mark.parametrize(
-    "error,expected", [(MissingKeyError(), "waiting_key"), (ValueError(), "failed")]
-)
+@pytest.mark.parametrize("error,expected", [(None, "waiting_key"), (ValueError(), "failed")])
 def test_decrypt_failure_and_missing_key_are_distinct(db, error, expected):
-    from conftest import FakeClient
+    from conftest import TEST_KEY, FakeSDK
 
     store = ArchiveStore(db)
     store.save_batch([chat()])
-    service = DecryptService(ServiceConfig(), store, FakeClient(data={"m1": error}))
+    service = DecryptService(
+        ServiceConfig(),
+        store,
+        sdk=FakeSDK(data={"m1": error}),
+        keys={1: TEST_KEY} if error is not None else {},
+    )
     service.process(service.acquire())
     assert state(db, EncryptedMessage, "m1") == expected
     store.recover(set())
@@ -88,14 +90,16 @@ def test_decrypt_failure_and_missing_key_are_distinct(db, error, expected):
 
 
 def test_decrypt_retains_raw_string_without_parsing(db):
-    from conftest import FakeClient
+    from conftest import TEST_KEY, FakeSDK
 
     raw = '  { "msgtype": "text", "malformed": true }  '
     store = ArchiveStore(db)
     store.save_batch([chat()])
-    service = DecryptService(ServiceConfig(), store, FakeClient(data={"m1": raw}))
+    service = DecryptService(
+        ServiceConfig(), store, sdk=FakeSDK(data={"m1": raw}), keys={1: TEST_KEY}
+    )
     service.process(service.acquire())
-    with db.session() as session:
+    with db.session_factory() as session:
         row = session.get(DecryptedMessage, "m1")
         assert row.raw_text == raw
         assert row.status == "pending"
@@ -171,7 +175,7 @@ def test_new_consumer_does_not_replay_outside_window(db, age):
     store = ArchiveStore(db)
     parsed(store, timestamp=int((time.time() - age) * 1000))
     assert store.claim_consumer(["新增消费者"], 300) is None
-    with db.session() as session:
+    with db.session_factory() as session:
         assert session.get(ParsedMessage, "m1") is not None
         assert session.scalars(select(ConsumerTask)).all() == []
 

@@ -3,8 +3,12 @@ from __future__ import annotations
 import logging
 from _thread import RLock
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager, contextmanager
 from threading import Event, Thread
-from typing import Generic, TypeVar
+from typing import TypeVar, overload
+
+from pyweworkfinance import WeWorkFinance
 
 from ..config import ServiceConfig
 
@@ -14,7 +18,7 @@ log = logging.getLogger(__name__)
 TaskT = TypeVar("TaskT")
 
 
-class Service(ABC, Generic[TaskT]):
+class Service(ABC):
     """领取与停止共用闸门，停止后的进度快照不再增加。"""
 
     def __init__(
@@ -22,8 +26,12 @@ class Service(ABC, Generic[TaskT]):
         config: ServiceConfig,
         stop_event: Event | None = None,
         gate: RLock | None = None,
+        sdk: WeWorkFinance | None = None,
+        sdk_lock: RLock | None = None,
     ) -> None:
         self.config = config
+        self.sdk = sdk
+        self._sdk_lock = sdk_lock if sdk_lock is not None else RLock()
         self._stop = stop_event if stop_event is not None else Event()
         self._gate = gate if gate is not None else RLock()
         self._threads: list[Thread] = []
@@ -61,35 +69,39 @@ class Service(ABC, Generic[TaskT]):
             while thread.is_alive():
                 thread.join(timeout=0.1)
 
+    @overload
+    def work_scope(
+        self, claim: Callable[[], TaskT | None]
+    ) -> AbstractContextManager[TaskT | None]: ...
+
+    @overload
+    def work_scope(self) -> AbstractContextManager[bool | None]: ...
+
+    @contextmanager
+    def work_scope(
+        self, claim: Callable[[], TaskT | None] | None = None
+    ) -> Generator[TaskT | bool | None]:
+        with self._gate:
+            work = None if self.is_stopping() else (claim() if claim is not None else True)
+            if work is not None:
+                self._active += 1
+        try:
+            yield work
+        finally:
+            if work is not None:
+                with self._gate:
+                    self._active -= 1
+
     def _run(self) -> None:
         try:
-            while True:
-                with self._gate:
-                    if self.is_stopping():
-                        return
-                    task = self.acquire()
-                    if task is not None:
-                        self._active += 1
-                if task is None:
-                    self.wait()
-                    continue
-                try:
-                    self.process(task)
-                finally:
-                    with self._gate:
-                        self._active -= 1
-                self.after_task()
+            while not self.is_stopping():
+                self.run_once()
         except BaseException as exc:
             # 数据库状态写入失败时停止实例，保留处理中状态供重启恢复。
             self._fatal = exc
             log.error("子服务异常退出 service=%s error=%s", type(self).__name__, type(exc).__name__)
             self.stop()
 
-    def after_task(self) -> None:
-        pass
-
     @abstractmethod
-    def acquire(self) -> TaskT | None: ...
-
-    @abstractmethod
-    def process(self, task: TaskT) -> None: ...
+    def run_once(self) -> None:
+        """执行一轮业务；由子类决定领取、处理及等待的顺序。"""

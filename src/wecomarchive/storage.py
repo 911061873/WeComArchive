@@ -17,14 +17,14 @@ class ArchiveStore:
         self.db = database
 
     def cursor(self) -> int:
-        with self.db.lock, self.db.session() as session:
+        with self.db.lock, self.db.session_factory() as session:
             progress = session.get(Progress, 1)
             return progress.cursor if progress else 0
 
     def save_batch(self, chats: Sequence[EncryptedChat]) -> None:
         if not chats:
             return
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             for chat in chats:
                 if session.get(EncryptedMessage, chat.msgid) is None:
                     session.add(
@@ -44,7 +44,7 @@ class ArchiveStore:
                 progress.cursor = max(progress.cursor, cursor)
 
     def recover(self, versions: Collection[int]) -> None:
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             for model in (EncryptedMessage, DecryptedMessage, ConsumerTask):
                 session.execute(
                     update(model).where(model.status == "processing").values(status="pending")
@@ -69,7 +69,7 @@ class ArchiveStore:
         stage: Literal["decrypt", "parse"],
     ) -> EncryptedChat | tuple[str, str] | None:
         model = EncryptedMessage if stage == "decrypt" else DecryptedMessage
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             row = session.scalars(
                 select(model).where(model.status == "pending").order_by(model.msgid).limit(1)
             ).first()
@@ -83,14 +83,14 @@ class ArchiveStore:
     def decrypted(self, chat: EncryptedChat, raw_text: str) -> None:
         if not isinstance(raw_text, str):
             raise TypeError("解密结果必须为原始明文字符串")
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             session.add(
                 DecryptedMessage(msgid=chat.msgid, msgtype="", raw_data={}, raw_text=raw_text)
             )
             session.get(EncryptedMessage, chat.msgid).status = "success"
 
     def parsed(self, message: ConsumerMessage) -> None:
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             row = session.get(DecryptedMessage, message.msgid)
             row.status = "success"
             row.msgtype = message.msgtype
@@ -113,13 +113,13 @@ class ArchiveStore:
     ) -> None:
         model = EncryptedMessage if stage == "decrypt" else DecryptedMessage
         field = "decrypt_error" if stage == "decrypt" else "parse_error"
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             row = session.get(model, msgid)
             row.status = status
             setattr(row, field, error)
 
     def sequence(self, msgid: str) -> int:
-        with self.db.lock, self.db.session() as session:
+        with self.db.lock, self.db.session_factory() as session:
             return session.get(EncryptedMessage, msgid).seq
 
     def claim_consumer(
@@ -128,7 +128,7 @@ class ArchiveStore:
         window: float,
     ) -> tuple[str, ConsumerMessage] | None:
         now = int(time.time() * 1000)
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             for name in names:
                 # 每次只领取一个调用；不预先生成窗口外的消费者任务。
                 task_exists = (
@@ -167,7 +167,7 @@ class ArchiveStore:
         status: str,
         error: str | None = None,
     ) -> None:
-        with self.db.lock, self.db.session.begin() as session:
+        with self.db.lock, self.db.session_factory.begin() as session:
             task = session.get(ConsumerTask, (msgid, name))
             task.status = status
             task.error = error

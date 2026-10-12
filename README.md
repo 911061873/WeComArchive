@@ -17,7 +17,7 @@ python -m pip install ".[postgres]"
 
 ```python
 from pathlib import Path
-from wecomarchive import WeComArchive, ServiceConfig, ConsumerMessage
+from wecomarchive import WeComArchive, ConsumerMessage
 
 async def consume(message: ConsumerMessage):
     if "订单" in message.text:
@@ -26,9 +26,6 @@ async def consume(message: ConsumerMessage):
 with WeComArchive(
     corp_id="你的企业 ID",
     archive_secret="你的会话存档 Secret",
-    decrypt=ServiceConfig(threads=2, poll_interval=1),
-    parse=ServiceConfig(threads=2, poll_interval=1),
-    consume=ServiceConfig(threads=4, poll_interval=1),
 ) as archive:
     archive.set_private_key(Path("private_key.pem").read_bytes(), version=1)
     archive.add_consumer("订单处理", "订单", False, consume)
@@ -59,14 +56,16 @@ with WeComArchive(
 | `timeout` | `5` | SDK 请求超时秒数 |
 | `batch_size` | `1000` | 单次拉取数量，1–1000 |
 | `consumption_window_seconds` | `300` | 消息发送时间窗口秒数，必须为正数 |
-| `pull` / `decrypt` / `parse` | `ServiceConfig()` | 各服务线程数及空闲轮询间隔 |
-| `consume` | `ServiceConfig(threads=4)` | 消费服务线程数及空闲轮询间隔 |
-| `client` | 内置 FinanceClient | 可注入实现 ArchiveClient 协议的替身 |
 
-`ServiceConfig(threads=1, poll_interval=1.0)` 为各服务独立配置；拉取固定单线程。
+拉取、解密、解析服务默认各使用 1 个线程，消费服务使用 4 个线程；空闲轮询间隔为 1 秒。
+四个服务分别使用继承 `ServiceConfig` 的 `PullServiceConfig`、`DecryptServiceConfig`、
+`ParseServiceConfig` 和 `ConsumeServiceConfig`；`WeComArchiveConfig` 通过 `default_factory`
+为每个实例生成独立的默认配置。`PullServiceConfig` 校验拉取服务只能使用单线程。
 数据库支持 SQLite、MySQL、PostgreSQL；同一数据库仅允许一个主服务实例。
 SQLite 使用文件锁，MySQL/PostgreSQL 使用数据库会话锁。实例锁在构造时获取，直到关闭后释放。
-同一原生 SDK 句柄的调用使用锁保护；增加解密线程不会使共享原生 SDK 同时执行。
+`WeComArchive` 直接初始化一个 `WeWorkFinance` 实例，并传给四个服务共享；所有服务退出后统一释放。
+拉取服务直接调用 SDK，解密服务根据主服务管理的私钥获取原始明文。
+共享 SDK 的调用使用同一把锁保护；增加解密线程不会使原生 SDK 同时执行。
 密钥按版本精确匹配，没有版本 0 回退；私钥只保留在内存。
 
 ## 数据与处理语义
@@ -107,7 +106,7 @@ python -m build --wheel
 
 测试默认使用独立 SQLite 文件；`WECOM_TEST_DATABASE_URL` 可指定独立空 MySQL/PostgreSQL 测试库。
 测试拒绝清理已有业务库。SDK 使用替身及真实 RSA 运算，不访问企业微信。
-[basic.py](examples/basic.py) 为真实 SDK 示例；[offline.py](examples/offline.py) 无需凭据；
+[basic.py](examples/basic.py) 为真实 SDK 示例；
 [http_consumer.py](examples/http_consumer.py) 提供自定义 HTTP 消费者，需自行适配业务接口。
 
 自动构建保留现有 Nuitka wheel 工作流；迁移脚本随包分发，`scripts/verify_wheel.py` 验证编译模块和迁移。
@@ -115,17 +114,16 @@ python -m build --wheel
 ## 编译包的类型提示
 
 类型信息通过包内的 `.pyi` 和空的 `py.typed` 文件分发，IDE 读取存根，运行时加载 Nuitka 编译模块。
-修改公开接口后，在安装开发依赖的环境中，从源码重新生成存根，再构建 wheel：
+构建 wheel 时自动从当前源码生成存根，只写入 `build/` 构建目录，再随编译模块打包：
 
 ```shell
-stubgen --no-import --include-docstrings src/wecomarchive -o src
 python -m build --wheel
 ```
 
-生成后核对顶层导出、函数签名及 `Any` / `Incomplete` 类型；存根应随源码一起提交。
-自动生成的存根是初稿，Pydantic 模型等动态接口需要人工核对。
-命令会覆盖现有存根，手工补充的类型需要在重新生成后保留。
-`pyproject.toml` 的 `package-data` 显式包含根目录、`db` 和 `services` 的存根；新增子包时也要更新此列表。
+源码目录不保存或提交 `.pyi`，本地开发由 IDE 直接读取 `.py` 中的类型注解。
+构建隔离环境自动安装 `mypy`，使用 `stubgen` 生成各模块存根；迁移脚本不生成存根。
+配置及消息模型的存根保留源码中的 Pydantic 字段默认值、别名和验证器声明。
+新增普通子包会自动生成存根。自动生成仍可能包含 `Any` / `Incomplete`，公开接口应在源码中补全类型注解。
 禁用 Nuitka 自带的入口 `.pyi` 生成，统一使用这套完整的包内存根。
 发布前检查 wheel 内包含 `wecomarchive/py.typed`、`wecomarchive/__init__.pyi` 以及各子模块存根，
 并在源码目录外安装 wheel，验证 IDE 补全和类型检查。

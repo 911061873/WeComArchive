@@ -1,6 +1,6 @@
 [project]
 name = "wecomarchive"
-version = "0.2.2"
+version = "0.2.4"
 description = "企业微信会话存档、持久化流水线与多消费者框架"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,7 +22,7 @@ dev = ["pytest>=8,<10", "build>=1.2", "ruff>=0.12,<1", "nuitka>=4.2.2", "mypy>=1
 
 
 [build-system]
-requires = ["setuptools>=42", "wheel", "Nuitka[build-wheel]", "toml"]
+requires = ["setuptools>=42", "wheel", "Nuitka[build-wheel]", "toml", "mypy>=1.15,<3"]
 build-backend = "nuitka.distutils.Build"
 
 [tool.hatch.build.targets.wheel]
@@ -50,9 +50,6 @@ include-package-data = false
 [tool.setuptools.package-data]
 wecomarchive = [
     "py.typed",
-    "*.pyi",
-    "db/*.pyi",
-    "services/*.pyi",
     "migrations/env.py",
     "migrations/script.py.mako",
     "migrations/versions/*.py",

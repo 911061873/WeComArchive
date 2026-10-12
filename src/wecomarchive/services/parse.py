@@ -12,7 +12,7 @@ from .base import Service
 log = logging.getLogger(__name__)
 
 
-class ParseService(Service[tuple[str, str]]):
+class ParseService(Service):
     def __init__(
         self,
         config: ServiceConfig,
@@ -21,6 +21,13 @@ class ParseService(Service[tuple[str, str]]):
     ) -> None:
         super().__init__(config, **kwargs)
         self.store = store
+
+    def run_once(self) -> None:
+        with self.work_scope(self.acquire) as task:
+            if task is not None:
+                self.process(task)
+        if task is None:
+            self.wait()
 
     def acquire(self) -> tuple[str, str] | None:
         return self.store.claim("parse")
